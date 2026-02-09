@@ -314,6 +314,69 @@
             max-width: 500px;
             width: 90%;
             box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Filter Modal Specifics */
+        .filter-list {
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.2);
+            padding: 8px;
+            margin-top: 12px;
+            flex: 1;
+        }
+
+        .filter-group-header {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: #9ca3af;
+            padding: 8px 4px 4px 4px;
+            font-weight: bold;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 4px;
+        }
+
+        .filter-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .filter-item:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .filter-checkbox {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #4b5563;
+            border-radius: 4px;
+            margin-right: 12px;
+            position: relative;
+            background: transparent;
+        }
+
+        .filter-checkbox:checked {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+
+        .filter-checkbox:checked::after {
+            content: '✓';
+            position: absolute;
+            color: white;
+            font-size: 10px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }
 
         /* Custom scrollbar */
@@ -669,6 +732,112 @@
             );
         };
 
+        const FilterModal = ({ isOpen, onClose, roster, currentSelection, onApply }) => {
+            const [search, setSearch] = useState('');
+            const [tempSelection, setTempSelection] = useState(new Set());
+
+            useEffect(() => {
+                if (isOpen) {
+                    setTempSelection(new Set(currentSelection));
+                    setSearch('');
+                }
+            }, [isOpen, currentSelection]);
+
+            const handleToggle = (name) => {
+                const next = new Set(tempSelection);
+                if (next.has(name)) next.delete(name);
+                else next.add(name);
+                setTempSelection(next);
+            };
+
+            const handleToggleGroup = (categoryNames, shouldSelect) => {
+                const next = new Set(tempSelection);
+                categoryNames.forEach(name => {
+                    if (shouldSelect) next.add(name);
+                    else next.delete(name);
+                });
+                setTempSelection(next);
+            };
+
+            const filteredRoster = useMemo(() => {
+                if (!search) return roster;
+                const lower = search.toLowerCase();
+                const result = {};
+                Object.entries(roster).forEach(([cat, names]) => {
+                    const filteredNames = names.filter(n => n.toLowerCase().includes(lower));
+                    if (filteredNames.length > 0) result[cat] = filteredNames;
+                });
+                return result;
+            }, [roster, search]);
+
+            if (!isOpen) return null;
+
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-white">Filter Personnel</h2>
+                            <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl">&times;</button>
+                        </div>
+                        
+                        <input 
+                            type="text" 
+                            placeholder="Search names..." 
+                            value={search} 
+                            onChange={e => setSearch(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 text-white rounded p-2 mb-2 focus:outline-none focus:border-blue-500"
+                        />
+
+                        <div className="flex gap-2 mb-2">
+                            <button onClick={() => {
+                                const allVisible = Object.values(filteredRoster).flat();
+                                const next = new Set(tempSelection);
+                                allVisible.forEach(n => next.add(n));
+                                setTempSelection(next);
+                            }} className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded">Select All Visible</button>
+                            <button onClick={() => {
+                                const allVisible = Object.values(filteredRoster).flat();
+                                const next = new Set(tempSelection);
+                                allVisible.forEach(n => next.delete(n));
+                                setTempSelection(next);
+                            }} className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded">Deselect All Visible</button>
+                        </div>
+
+                        <div className="filter-list custom-scrollbar">
+                            {Object.entries(filteredRoster).map(([category, names]) => (
+                                <div key={category} className="mb-2">
+                                    <div className="filter-group-header flex justify-between group">
+                                        <span>{category}</span>
+                                        <span 
+                                            className="cursor-pointer text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            onClick={() => {
+                                                const allInGroupSelected = names.every(n => tempSelection.has(n));
+                                                handleToggleGroup(names, !allInGroupSelected);
+                                            }}
+                                        >
+                                            Toggle Group
+                                        </span>
+                                    </div>
+                                    {names.map(name => (
+                                        <div key={name} className="filter-item" onClick={() => handleToggle(name)}>
+                                            <div className={`filter-checkbox ${tempSelection.has(name) ? 'checked' : ''}`} style={tempSelection.has(name) ? {background:'#3b82f6', borderColor:'#3b82f6'} : {}}></div>
+                                            <span className="text-sm text-gray-300">{name}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
+                            {Object.keys(filteredRoster).length === 0 && <div className="text-gray-500 text-center py-4">No matches found</div>}
+                        </div>
+
+                        <div className="flex justify-end gap-2 mt-4">
+                            <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">Cancel</button>
+                            <button onClick={() => onApply(tempSelection)} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold">Apply Filter</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         function App() {
             const [roster, setRoster] = useState({});
             const [dates, setDates] = useState([]);
@@ -678,6 +847,8 @@
             const [progress, setProgress] = useState('');
             const [error, setError] = useState(null);
             const [selectedCategory, setSelectedCategory] = useState('All');
+            const [visiblePersonnel, setVisiblePersonnel] = useState(new Set());
+            const [isFilterOpen, setIsFilterOpen] = useState(false);
             const [selectedEvent, setSelectedEvent] = useState(null);
             const [timelineSelection, setTimelineSelection] = useState(null);
             const [lastUpdated, setLastUpdated] = useState(null);
@@ -700,12 +871,7 @@
                         if (listJson.error) throw new Error(listJson.message);
 
                         setRoster(rosterJson.roster);
-
-                        // Initialize latest time with roster fetch time if available
-                        let latestFetchTime = null;
-                        if (rosterJson.metadata && rosterJson.metadata["current-as-of"]) {
-                            latestFetchTime = new Date(rosterJson.metadata["current-as-of"]);
-                        }
+                        setVisiblePersonnel(new Set(Object.values(rosterJson.roster).flat()));
 
                         const sheetList = listJson.sheets;
                         setDates(sheetList.map(s => s.isoDate));
@@ -727,13 +893,14 @@
                         
                         let allEvents = [];
                         let allStatuses = [];
+                        let latestFetchTime = null;
 
                         sheetsData.forEach(dayData => {
                             if (!dayData || !dayData.schedule || !dayData.schedule.data) return;
                             
-                            // Check current-as-of
-                            if (dayData.metadata && dayData.metadata["current-as-of"]) {
-                                const t = new Date(dayData.metadata["current-as-of"]);
+                            // Check fetchedAt
+                            if (dayData.metadata && dayData.metadata.fetchedAt) {
+                                const t = new Date(dayData.metadata.fetchedAt);
                                 if (!latestFetchTime || t > latestFetchTime) {
                                     latestFetchTime = t;
                                 }
@@ -755,7 +922,7 @@
 
                         setScheduleData(allEvents);
                         setPersonnelStatuses(allStatuses);
-                        setLastUpdated(latestFetchTime);
+                        setLastUpdated(latestFetchTime || new Date());
                         setLoading(false);
                     } catch (err) {
                         setError(err.message);
@@ -764,6 +931,19 @@
                 };
                 loadData();
             }, []);
+
+            const handleCategoryChange = (e) => {
+                const cat = e.target.value;
+                setSelectedCategory(cat);
+                if (cat === 'All') setVisiblePersonnel(new Set(Object.values(roster).flat()));
+                else if (cat !== 'Custom' && roster[cat]) setVisiblePersonnel(new Set(roster[cat]));
+            };
+
+            const handleFilterApply = (newSelection) => {
+                setVisiblePersonnel(newSelection);
+                setSelectedCategory('Custom');
+                setIsFilterOpen(false);
+            };
 
             const addGlobalListeners = () => {
                 window.addEventListener('pointermove', handleWindowPointerMove);
@@ -838,9 +1018,10 @@
             };
 
             const personnelList = useMemo(() => {
-                if (selectedCategory === 'All') return Object.entries(roster).flatMap(([cat, names]) => names.map(name => ({ name, category: cat })));
-                return (roster[selectedCategory] || []).map(name => ({ name, category: selectedCategory }));
-            }, [roster, selectedCategory]);
+                return Object.entries(roster).flatMap(([cat, names]) => {
+                    return names.filter(name => visiblePersonnel.has(name)).map(name => ({ name, category: cat }));
+                });
+            }, [roster, visiblePersonnel]);
 
             // UPDATED DATE FORMATTING (UTC)
             const formatHeaderDate = (isoDate) => {
@@ -873,6 +1054,7 @@
             return (
                 <div className="flex flex-col h-full">
                     <Modal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+                    <FilterModal isOpen={isFilterOpen} onClose={() => setIsFilterOpen(false)} roster={roster} currentSelection={visiblePersonnel} onApply={handleFilterApply} />
                     <div className="glass-header flex justify-between items-center">
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">TPS CREW RAINBOW</h1>
@@ -881,7 +1063,18 @@
                                 {lastUpdated && <span className="ml-3 text-gray-500 border-l border-gray-600 pl-3">Updated: {lastUpdated.toLocaleTimeString()} {lastUpdated.toLocaleDateString()}</span>}
                             </p>
                         </div>
-                        <div className="flex gap-3"><select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"><option value="All">All Personnel</option>{Object.keys(roster).map(cat => (<option key={cat} value={cat}>{cat}</option>))}</select><button onClick={() => window.location.reload()} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button></div>
+                        <div className="flex gap-3 items-center">
+                            <button onClick={() => setIsFilterOpen(true)} className="bg-gray-700 border border-gray-600 hover:bg-gray-600 text-white px-3 py-1 rounded-lg text-sm flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+                                Filter
+                            </button>
+                            <select value={selectedCategory} onChange={handleCategoryChange} className="bg-gray-800 border border-gray-700 text-gray-300 rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="All">All Personnel</option>
+                                {Object.keys(roster).map(cat => (<option key={cat} value={cat}>{cat}</option>))}
+                                <option value="Custom" disabled>Custom Selection</option>
+                            </select>
+                            <button onClick={() => window.location.reload()} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
+                        </div>
                     </div>
                     {loading ? (<div className="flex flex-col items-center justify-center flex-1"><div className="spinner mb-4 w-10 h-10 border-4"></div><div className="text-blue-400 font-bold tracking-widest uppercase text-xs animate-pulse">{progress}</div></div>) : (
                         <div className="gantt-container" onPointerDown={handleContainerPointerDown}>
