@@ -1,4 +1,4 @@
-<!-- Version 5.2 - Last Updated Timestamp & Production Features -->
+<!-- Version 5.5 - Timeline Handles Fix and Filtering Added -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -276,8 +276,8 @@
 
         .timeline-range-handle {
             position: absolute;
-            top: 0;
-            height: 54px;
+            bottom: 0;
+            height: 40px;
             width: 16px;
             cursor: ew-resize;
             z-index: 60;
@@ -398,6 +398,27 @@
 
         const API_URL = 'https://script.google.com/macros/s/AKfycbyZNyrLxkW2vjbq8xpii43rWzYkkDvJTQ_KQCGMyErPZKqssL0XiA_UknwxOJ_XGzAt/exec';
 
+        // --- COLUMN STRUCTURE (per output-sheet.json) ---
+        // slice(start, end) is END-EXCLUSIVE: slice(6,14) gets indices 6-13
+        // Flying:  0=Model 1=Brief 2=ETD 3=ETA 4=Debrief 5=Event 6-13=Crew 14=Notes 15=Eff 16=CX 17=PartE
+        // Ground:  0=Event 1=Start 2=End 3-12=People 13=Notes 14=Eff 15=CX 16=PartE
+        // NA:      0=Reason 1=Start 2=End 3-12=People 13=Notes
+        const COL = {
+            flying:  { crew: [6, 14], notes: 14, cancelled: 16 },
+            ground:  { people: [3, 13], notes: 13, cancelled: 15 },
+            na:      { people: [3, 13], notes: 13 }
+        };
+
+        // --- EVENT TYPE FILTER CONFIG ---
+        const EVENT_TYPE_FILTERS = [
+            { key: 'Supervision', label: 'Supv', color: '#8b5cf6' },
+            { key: 'Flying', label: 'Flt', color: '#10b981' },
+            { key: 'Ground', label: 'Gnd', color: '#f59e0b' },
+            { key: 'NA', label: 'NAs', color: '#ef4444' },
+            { key: 'Academics', label: 'Acad', color: '#3b82f6' },
+            { key: 'Notes', label: 'Notes', color: '#facc15' }
+        ];
+
         // --- UTILITIES ---
 
         const timeToMinutes = (timeStr) => {
@@ -479,8 +500,9 @@
                 const start = row[1];
                 const eventName = row[5];
                 if (!start || !eventName || eventName === 'Event') return;
-                
-                const crew = row.slice(6, 15).filter(c => c && c.trim());
+                if (String(row[COL.flying.cancelled]).toUpperCase() === 'TRUE') return;
+
+                const crew = row.slice(...COL.flying.crew).filter(c => c && c.trim());
                 crew.forEach(person => {
                     events.push({
                         type: 'Flying',
@@ -492,8 +514,9 @@
                         person: person.trim(),
                         date: date,
                         fullTitle: `${row[0] || ''} - ${eventName}`,
-                        details: `Brief: ${start}, ETD: ${row[2]}, ETA: ${row[3]}, Crew: ${crew.join(', ')}`,
-                        notes: row[15]
+                        details: `Brief: ${start}, ETD: ${row[2]}, ETA: ${row[3]} Crew: ${crew.join(' | ')}`,
+                        notes: row[COL.flying.notes],
+                        cancelled: row[COL.flying.cancelled]
                     });
                 });
             });
@@ -507,8 +530,9 @@
                 const eventName = row[0];
                 const start = row[1];
                 if (!eventName || !start || eventName === 'Events') return;
+                if (String(row[COL.ground.cancelled]).toUpperCase() === 'TRUE') return;
 
-                const people = row.slice(3, 10).filter(p => p && p.trim());
+                const people = row.slice(...COL.ground.people).filter(p => p && p.trim());
                 people.forEach(person => {
                     events.push({
                         type: 'Ground',
@@ -518,7 +542,9 @@
                         person: person.trim(),
                         date: date,
                         fullTitle: eventName,
-                        notes: row[10]
+                        details: `${people.join(' | ')}`,
+                        notes: row[COL.ground.notes],
+                        cancelled: row[COL.ground.cancelled]
                     });
                 });
             });
@@ -533,7 +559,7 @@
                 const start = row[1];
                 if (!reason || !start || reason === 'Reason') return;
 
-                const people = row.slice(3).filter(p => p && p.trim());
+                const people = row.slice(...COL.na.people).filter(p => p && p.trim());
                 people.forEach(person => {
                     events.push({
                         type: 'NA',
@@ -542,7 +568,8 @@
                         end: row[2],
                         person: person.trim(),
                         date: date,
-                        fullTitle: `NA: ${reason}`
+                        fullTitle: `NA: ${reason}`,
+                        notes: row[COL.na.notes]
                     });
                 });
             });
@@ -554,9 +581,7 @@
             const events = [];
             const groupMap = {
                 'Alpha FTC': 'FTC-A', 'Alpha STC': 'STC-A',
-                'Bravo FTC': 'FTC-B', 'Bravo STC': 'STC-B',
-                'IP': 'Staff IP', 'Staff STC': 'Staff STC',
-                'IFTE/IWSO': 'Staff IFTE/ICSO'
+                'Bravo FTC': 'FTC-B', 'Bravo STC': 'STC-B'
             };
 
             data.forEach(row => {
@@ -619,8 +644,20 @@
             if (type === 'range') {
                 const sPercent = getLeftPercent(start);
                 const ePercent = getLeftPercent(end);
+                const durMins = end - start;
+                const durLabel = durMins >= 60 ? `${Math.floor(durMins/60)}:${String(durMins%60).padStart(2,'0')}` : `${durMins}m`;
+                const midPercent = (sPercent + ePercent) / 2;
                 return (
                     <div className="timeline-handle-container">
+                        <div style={{ position:'absolute', left:`${sPercent}%`, top:'0px', transform:'translateX(-50%)', fontSize:'0.6rem', fontWeight:'bold', color:'#3b82f6', pointerEvents:'none', zIndex:61, whiteSpace:'nowrap' }}>
+                            {minutesToTime(start)}
+                        </div>
+                        <div style={{ position:'absolute', left:`${midPercent}%`, top:'10px', transform:'translateX(-50%)', fontSize:'0.6rem', fontWeight:'bold', color:'#93c5fd', pointerEvents:'none', zIndex:61, whiteSpace:'nowrap' }}>
+                            {durLabel}
+                        </div>
+                        <div style={{ position:'absolute', left:`${ePercent}%`, top:'0px', transform:'translateX(-50%)', fontSize:'0.6rem', fontWeight:'bold', color:'#3b82f6', pointerEvents:'none', zIndex:61, whiteSpace:'nowrap' }}>
+                            {minutesToTime(end)}
+                        </div>
                         <div className="timeline-range-handle" style={{ left: `calc(${sPercent}% - 8px)` }} onPointerDown={(e) => { e.stopPropagation(); onUpdate('drag-start', e); }}>
                             <div className="timeline-range-handle-visual" />
                         </div>
@@ -852,13 +889,14 @@
             const [selectedEvent, setSelectedEvent] = useState(null);
             const [timelineSelection, setTimelineSelection] = useState(null);
             const [lastUpdated, setLastUpdated] = useState(null);
+            const [visibleTypes, setVisibleTypes] = useState(new Set(['Supervision', 'Flying', 'Ground', 'NA', 'Academics', 'Notes']));
             const dragRef = useRef(null);
 
             useEffect(() => {
                 const loadData = async () => {
                     try {
                         setLoading(true);
-                        setProgress('Initializing specialized team...');
+                        setProgress('Pulling all that TPS schedule data...');
                         const [rosterRes, listRes] = await Promise.all([
                             fetch(`${API_URL}?type=roster`),
                             fetch(`${API_URL}?type=list`)
@@ -876,7 +914,7 @@
                         const sheetList = listJson.sheets;
                         setDates(sheetList.map(s => s.isoDate));
 
-                        setProgress(`Fetching ${sheetList.length} days...`);
+                        setProgress(`Fetching ${sheetList.length} days...because we care...`);
                         
                         const sheetPromises = sheetList.map(async (sheet) => {
                             const url = `${API_URL}?type=sheet&name=${encodeURIComponent(sheet.name)}&date=${sheet.isoDate}`;
@@ -943,6 +981,15 @@
                 setVisiblePersonnel(newSelection);
                 setSelectedCategory('Custom');
                 setIsFilterOpen(false);
+            };
+
+            const toggleEventType = (key) => {
+                setVisibleTypes(prev => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                });
             };
 
             const addGlobalListeners = () => {
@@ -1062,6 +1109,21 @@
                                 {loading ? progress : `Active: ${scheduleData.length} Events across ${dates.length} Days`}
                                 {lastUpdated && <span className="ml-3 text-gray-500 border-l border-gray-600 pl-3">Updated: {lastUpdated.toLocaleTimeString()} {lastUpdated.toLocaleDateString()}</span>}
                             </p>
+                            <div className="flex gap-1 mt-1">
+                                {EVENT_TYPE_FILTERS.map(f => (
+                                    <button
+                                        key={f.key}
+                                        onClick={() => toggleEventType(f.key)}
+                                        className="px-2 py-0.5 rounded text-xs font-bold transition-all"
+                                        style={visibleTypes.has(f.key)
+                                            ? { backgroundColor: f.color + '33', color: f.color, border: `1px solid ${f.color}` }
+                                            : { backgroundColor: 'transparent', color: '#6b7280', border: '1px solid #4b5563' }
+                                        }
+                                    >
+                                        {f.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                         <div className="flex gap-3 items-center">
                             <button onClick={() => setIsFilterOpen(true)} className="bg-gray-700 border border-gray-600 hover:bg-gray-600 text-white px-3 py-1 rounded-lg text-sm flex items-center gap-2">
@@ -1092,8 +1154,8 @@
                                     <React.Fragment key={`${person.name}-${idx}`}>
                                         <div className="gantt-row-name border-b border-gray-800/50"><div><div className="font-bold text-white leading-tight">{person.name}</div><div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div></div></div>
                                         {dates.map(date => {
-                                            const cellEvents = scheduleData.filter(e => e.person === person.name && e.date === date);
-                                            const status = personnelStatuses.find(s => s.person === person.name && s.date === date);
+                                            const cellEvents = scheduleData.filter(e => e.person === person.name && e.date === date && visibleTypes.has(e.type));
+                                            const status = visibleTypes.has('Notes') ? personnelStatuses.find(s => s.person === person.name && s.date === date) : null;
                                             return (<div key={`${person.name}-${date}`} className="gantt-cell-container border-b border-gray-800/50 border-r border-gray-800/30"><GanttCell events={cellEvents} status={status} onEventClick={(ev) => { setSelectedEvent(ev); }} /></div>);
                                         })}
                                     </React.Fragment>
