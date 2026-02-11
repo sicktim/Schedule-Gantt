@@ -1,4 +1,4 @@
-<!-- Version 5.5 - Timeline Handles Fix and Filtering Added -->
+<!-- Version 5.5 - Refresh Button Cache Refresh -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -892,83 +892,97 @@
             const [visibleTypes, setVisibleTypes] = useState(new Set(['Supervision', 'Flying', 'Ground', 'NA', 'Academics', 'Notes']));
             const dragRef = useRef(null);
 
-            useEffect(() => {
-                const loadData = async () => {
-                    try {
-                        setLoading(true);
-                        setProgress('Pulling all that TPS schedule data...');
-                        const [rosterRes, listRes] = await Promise.all([
-                            fetch(`${API_URL}?type=roster`),
-                            fetch(`${API_URL}?type=list`)
-                        ]);
+            const loadData = async () => {
+                try {
+                    setLoading(true);
+                    setProgress('Pulling all that TPS schedule data...');
+                    const [rosterRes, listRes] = await Promise.all([
+                        fetch(`${API_URL}?type=roster`),
+                        fetch(`${API_URL}?type=list`)
+                    ]);
 
-                        const rosterJson = await rosterRes.json();
-                        const listJson = await listRes.json();
+                    const rosterJson = await rosterRes.json();
+                    const listJson = await listRes.json();
 
-                        if (rosterJson.error) throw new Error(rosterJson.message);
-                        if (listJson.error) throw new Error(listJson.message);
+                    if (rosterJson.error) throw new Error(rosterJson.message);
+                    if (listJson.error) throw new Error(listJson.message);
 
-                        setRoster(rosterJson.roster);
-                        setVisiblePersonnel(new Set(Object.values(rosterJson.roster).flat()));
+                    setRoster(rosterJson.roster);
+                    setVisiblePersonnel(new Set(Object.values(rosterJson.roster).flat()));
 
-                        const sheetList = listJson.sheets;
-                        setDates(sheetList.map(s => s.isoDate));
+                    const sheetList = listJson.sheets;
+                    setDates(sheetList.map(s => s.isoDate));
 
-                        setProgress(`Fetching ${sheetList.length} days...because we care...`);
-                        
-                        const sheetPromises = sheetList.map(async (sheet) => {
-                            const url = `${API_URL}?type=sheet&name=${encodeURIComponent(sheet.name)}&date=${sheet.isoDate}`;
-                            try {
-                                const res = await fetch(url);
-                                return await res.json();
-                            } catch (e) {
-                                return null;
+                    setProgress(`Fetching ${sheetList.length} days...because we care...`);
+
+                    const sheetPromises = sheetList.map(async (sheet) => {
+                        const url = `${API_URL}?type=sheet&name=${encodeURIComponent(sheet.name)}&date=${sheet.isoDate}`;
+                        try {
+                            const res = await fetch(url);
+                            return await res.json();
+                        } catch (e) {
+                            return null;
+                        }
+                    });
+
+                    const sheetsData = await Promise.all(sheetPromises);
+                    setProgress('Parsing raw data...');
+
+                    let allEvents = [];
+                    let allStatuses = [];
+                    let latestFetchTime = null;
+
+                    sheetsData.forEach(dayData => {
+                        if (!dayData || !dayData.schedule || !dayData.schedule.data) return;
+
+                        // Check fetchedAt
+                        if (dayData.metadata && dayData.metadata.fetchedAt) {
+                            const t = new Date(dayData.metadata.fetchedAt);
+                            if (!latestFetchTime || t > latestFetchTime) {
+                                latestFetchTime = t;
                             }
-                        });
+                        }
 
-                        const sheetsData = await Promise.all(sheetPromises);
-                        setProgress('Parsing raw data...');
-                        
-                        let allEvents = [];
-                        let allStatuses = [];
-                        let latestFetchTime = null;
+                        const date = dayData.metadata.sourceSheet.date;
+                        const raw = dayData.schedule.data;
 
-                        sheetsData.forEach(dayData => {
-                            if (!dayData || !dayData.schedule || !dayData.schedule.data) return;
-                            
-                            // Check fetchedAt
-                            if (dayData.metadata && dayData.metadata.fetchedAt) {
-                                const t = new Date(dayData.metadata.fetchedAt);
-                                if (!latestFetchTime || t > latestFetchTime) {
-                                    latestFetchTime = t;
-                                }
-                            }
+                        allEvents.push(...parseSupervision(raw.supervision, date));
+                        allEvents.push(...parseFlying(raw.flying, date));
+                        allEvents.push(...parseGround(raw.ground, date));
+                        allEvents.push(...parseNA(raw.na, date));
+                        allEvents.push(...parseAcademics(raw.academics, rosterJson.roster, date));
 
-                            const date = dayData.metadata.sourceSheet.date;
-                            const raw = dayData.schedule.data;
+                        if (raw.personnelNotes) {
+                            allStatuses.push(...parsePersonnelStatus(raw.personnelNotes, date));
+                        }
+                    });
 
-                            allEvents.push(...parseSupervision(raw.supervision, date));
-                            allEvents.push(...parseFlying(raw.flying, date));
-                            allEvents.push(...parseGround(raw.ground, date));
-                            allEvents.push(...parseNA(raw.na, date));
-                            allEvents.push(...parseAcademics(raw.academics, rosterJson.roster, date));
+                    setScheduleData(allEvents);
+                    setPersonnelStatuses(allStatuses);
+                    setLastUpdated(latestFetchTime || new Date());
+                    setLoading(false);
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
 
-                            if (raw.personnelNotes) {
-                                allStatuses.push(...parsePersonnelStatus(raw.personnelNotes, date));
-                            }
-                        });
+            const handleRefresh = async () => {
+                try {
+                    setLoading(true);
+                    setProgress('Refreshing from Whiteboard 2.0 (bypassing cache)...');
+                    const batchRes = await fetch(`${API_URL}?type=batch&refresh=true`);
+                    const batchJson = await batchRes.json();
+                    if (batchJson.error) throw new Error(batchJson.message);
+                    setProgress('Cache refreshed. Reloading data...');
+                    await loadData();
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
 
-                        setScheduleData(allEvents);
-                        setPersonnelStatuses(allStatuses);
-                        setLastUpdated(latestFetchTime || new Date());
-                        setLoading(false);
-                    } catch (err) {
-                        setError(err.message);
-                        setLoading(false);
-                    }
-                };
-                loadData();
-            }, []);
+            useEffect(() => { loadData(); }, []);
 
             const handleCategoryChange = (e) => {
                 const cat = e.target.value;
@@ -1135,7 +1149,7 @@
                                 {Object.keys(roster).map(cat => (<option key={cat} value={cat}>{cat}</option>))}
                                 <option value="Custom" disabled>Custom Selection</option>
                             </select>
-                            <button onClick={() => window.location.reload()} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
+                            <button onClick={handleRefresh} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
                         </div>
                     </div>
                     {loading ? (<div className="flex flex-col items-center justify-center flex-1"><div className="spinner mb-4 w-10 h-10 border-4"></div><div className="text-blue-400 font-bold tracking-widest uppercase text-xs animate-pulse">{progress}</div></div>) : (
