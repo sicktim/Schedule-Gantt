@@ -531,21 +531,22 @@
             data.forEach(row => {
                 const start = row[1];
                 const eventName = row[5];
-                if (!start || !eventName || eventName === 'Event') return;
+                const model = row[0];
+                if (!start || (!eventName && !model) || eventName === 'Event') return;
                 if (String(row[COL.flying.cancelled]).toUpperCase() === 'TRUE') return;
 
                 const crew = row.slice(...COL.flying.crew).filter(c => c && c.trim());
                 crew.forEach(person => {
                     events.push({
                         type: 'Flying',
-                        title: row[0] || 'A/C',
+                        title: model || 'A/C',
                         start: start,
                         end: row[4],
-                        etd: row[2], // Column 2
-                        eta: row[3], // Column 3
+                        etd: row[2],
+                        eta: row[3],
                         person: person.trim(),
                         date: date,
-                        fullTitle: `${row[0] || ''} - ${eventName}`,
+                        fullTitle: eventName ? `${model || ''} - ${eventName}` : (model || 'Flying'),
                         details: `Brief: ${start}, ETD: ${row[2]}, ETA: ${row[3]} Crew: ${crew.join(' | ')}`,
                         notes: row[COL.flying.notes],
                         cancelled: row[COL.flying.cancelled]
