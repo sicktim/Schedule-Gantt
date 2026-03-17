@@ -1,4 +1,4 @@
-<!-- Version 5.5 - Refresh Button Cache Refresh -->
+<!-- Version 6.0 - Single-call API via TPS Schedule v6.0 ?mode=full -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -73,30 +73,91 @@
             100% { transform: rotate(360deg); }
         }
 
-        /* Gantt Container */
+        /* Gantt Wrapper — two-panel freeze-pane layout */
+        .gantt-wrapper {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            background: rgba(15, 15, 35, 1);
+        }
+
+        /* Left panel: frozen personnel names (scrolls vertically only) */
+        .gantt-names-panel {
+            width: 180px;
+            flex-shrink: 0;
+            overflow: hidden;
+            z-index: 30;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .gantt-name-header {
+            background: rgba(30, 30, 60, 1);
+            height: 54px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            border-right: 1px solid rgba(255,255,255,0.1);
+            color: white;
+            font-weight: bold;
+            font-size: 0.75rem;
+            cursor: default;
+            flex-shrink: 0;
+        }
+
+        .gantt-names-scroll {
+            overflow: hidden;
+            /* Must have a constrained height so programmatic scrollTop has effect */
+            flex: 1;
+            min-height: 0;
+            /* Bottom padding matches the horizontal scrollbar height (14px) so
+               the last name row aligns with the last grid row above the scrollbar */
+            padding-bottom: 14px;
+        }
+
+        .gantt-row-name {
+            background: rgba(20, 20, 40, 1);
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            display: flex;
+            align-items: center;
+            min-height: 38px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            border-right: 1px solid rgba(255,255,255,0.15);
+            user-select: none;
+            box-sizing: border-box;
+        }
+
+        /* Right panel: scrollable schedule area */
         .gantt-container {
             flex: 1;
             overflow: auto;
             position: relative;
-            background: rgba(0, 0, 0, 0.2);
+            background: rgba(15, 15, 35, 1);
             cursor: grab;
             touch-action: none;
         }
-        
+
         .gantt-container:active {
             cursor: grabbing;
         }
-        
+
+        /* Thicker scrollbars on the schedule panel */
+        .gantt-container::-webkit-scrollbar { width: 14px; height: 14px; }
+        .gantt-container::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+        .gantt-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 7px; }
+        .gantt-container::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+        .gantt-container::-webkit-scrollbar-corner { background: rgba(0,0,0,0); }
+
         .gantt-grid {
             display: grid;
-            grid-template-columns: 180px repeat(14, 300px); /* Name col + days */
-            gap: 1px;
-            background: rgba(255, 255, 255, 0.1);
-            min-height: 100%;
             position: relative;
+            align-content: start;
         }
 
-        /* Sticky Headers */
+        /* Day column headers (sticky to top only) */
         .gantt-header {
             background: rgba(30, 30, 60, 1);
             padding: 6px 8px 0px 8px;
@@ -125,44 +186,14 @@
             pointer-events: none;
         }
 
-        /* Corner Piece */
-        .gantt-name-header {
-            position: sticky;
-            left: 0;
-            top: 0;
-            z-index: 50;
-            background: rgba(30, 30, 60, 1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-right: 1px solid rgba(255,255,255,0.1);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            color: white;
-            font-weight: bold;
-            cursor: default;
-        }
-
-        /* Row Names */
-        .gantt-row-name {
-            position: sticky;
-            left: 0;
-            background: rgba(20, 20, 40, 1);
-            padding: 4px 8px;
-            font-size: 0.75rem;
-            display: flex;
-            align-items: center;
-            z-index: 30;
-            border-right: 1px solid rgba(255,255,255,0.15);
-            box-shadow: 2px 0 5px rgba(0,0,0,0.2);
-            user-select: none;
-        }
-
         /* Cells */
         .gantt-cell-container {
-            background: rgba(15, 15, 35, 0.6);
+            background: rgba(15, 15, 35, 1);
             position: relative;
             padding: 0;
+            min-height: 38px;
             border-right: 1px solid rgba(255,255,255,0.05);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
         }
 
         .event-bar {
@@ -211,25 +242,25 @@
         /* Timeline Overlay Styles */
         .timeline-grid-line {
             position: absolute;
-            top: 54px;
+            top: 0;
             bottom: 0;
             width: 2px;
             background-color: #ef4444;
             box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
             pointer-events: none;
-            z-index: 55;
+            z-index: 35;
             will-change: transform, left;
         }
 
         .timeline-grid-range {
             position: absolute;
-            top: 54px;
+            top: 0;
             bottom: 0;
             background-color: rgba(59, 130, 246, 0.15);
             border-left: 1px solid rgba(59, 130, 246, 0.5);
             border-right: 1px solid rgba(59, 130, 246, 0.5);
             pointer-events: none;
-            z-index: 55;
+            z-index: 35;
             will-change: transform, left;
         }
 
@@ -396,7 +427,8 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
-        const API_URL = 'https://script.google.com/macros/s/AKfycbyZNyrLxkW2vjbq8xpii43rWzYkkDvJTQ_KQCGMyErPZKqssL0XiA_UknwxOJ_XGzAt/exec';
+        // v6.0 API — single ?mode=full call replaces roster + list + N sheet calls
+        const API_URL = 'https://script.google.com/macros/s/AKfycbxeaUSfQCB1xpyTtRvobV7DzHY14HeScjG8gg-cfRzhrWziFoR_Vy6UqqMJLjto4pl83Q/exec';
 
         // --- COLUMN STRUCTURE (per output-sheet.json) ---
         // slice(start, end) is END-EXCLUSIVE: slice(6,14) gets indices 6-13
@@ -673,7 +705,8 @@
         const TimelineMarkerLine = ({ selection, dayIndex }) => {
             if (!selection || selection.dayIndex !== dayIndex) return null;
             const { type, start, end } = selection;
-            const leftOffset = 181 + (dayIndex * 301);
+            // leftOffset: name column is now OUTSIDE the grid, so offset is just dayIndex * 300px
+            const leftOffset = dayIndex * 300;
             if (type === 'marker') {
                 const percent = getLeftPercent(start);
                 return <div className="timeline-grid-line" style={{ left: `${leftOffset + (percent * 3)}px` }} />;
@@ -891,66 +924,76 @@
             const [lastUpdated, setLastUpdated] = useState(null);
             const [visibleTypes, setVisibleTypes] = useState(new Set(['Supervision', 'Flying', 'Ground', 'NA', 'Academics', 'Notes']));
             const dragRef = useRef(null);
+            const namesScrollRef = useRef(null);
+            const ganttContainerRef = useRef(null);
+            const pointerListenersRef = useRef({ move: null, up: null });
+
+            // Sync left-panel names scroll position with the right-panel container scroll.
+            // Depends on `loading` because the gantt DOM (and refs) only exist after loading is false.
+            useEffect(() => {
+                const container = ganttContainerRef.current;
+                const namesScroll = namesScrollRef.current;
+                if (!container || !namesScroll) return;
+                const onScroll = () => { namesScroll.scrollTop = container.scrollTop; };
+                container.addEventListener('scroll', onScroll, { passive: true });
+                return () => container.removeEventListener('scroll', onScroll);
+            }, [loading]);
+
+            // Sync row heights: measure each grid row's actual height and apply to the name rows.
+            // Runs after render when events/filters change so stacked rows expand the name column too.
+            // Also re-syncs on window resize.
+            useEffect(() => {
+                if (loading) return;
+                const syncHeights = () => {
+                    const grid = document.querySelector('.gantt-grid');
+                    const nameRows = namesScrollRef.current ? namesScrollRef.current.querySelectorAll('.gantt-row-name') : [];
+                    if (!grid || nameRows.length === 0) return;
+                    const numDates = dates.length;
+                    if (numDates === 0) return;
+                    const cells = grid.querySelectorAll('.gantt-cell-container');
+                    for (let i = 0; i < nameRows.length; i++) {
+                        const firstCellIdx = i * numDates;
+                        if (cells[firstCellIdx]) {
+                            nameRows[i].style.height = cells[firstCellIdx].getBoundingClientRect().height + 'px';
+                        }
+                    }
+                };
+                syncHeights();
+                window.addEventListener('resize', syncHeights);
+                return () => window.removeEventListener('resize', syncHeights);
+            }, [loading, scheduleData, visibleTypes, visiblePersonnel, dates, selectedCategory]);
 
             const loadData = async () => {
                 try {
                     setLoading(true);
                     setProgress('Pulling all that TPS schedule data...');
-                    const [rosterRes, listRes] = await Promise.all([
-                        fetch(`${API_URL}?type=roster`),
-                        fetch(`${API_URL}?type=list`)
-                    ]);
 
-                    const rosterJson = await rosterRes.json();
-                    const listJson = await listRes.json();
+                    // v6.0: Single API call gets roster + all days in one response
+                    const res = await fetch(`${API_URL}?mode=full`);
+                    const fullData = await res.json();
 
-                    if (rosterJson.error) throw new Error(rosterJson.message);
-                    if (listJson.error) throw new Error(listJson.message);
+                    if (fullData.error) throw new Error(fullData.message);
 
-                    setRoster(rosterJson.roster);
-                    setVisiblePersonnel(new Set(Object.values(rosterJson.roster).flat()));
+                    setRoster(fullData.roster);
+                    setVisiblePersonnel(new Set(Object.values(fullData.roster).flat()));
+                    setDates(fullData.days.map(d => d.isoDate));
 
-                    const sheetList = listJson.sheets;
-                    setDates(sheetList.map(s => s.isoDate));
-
-                    setProgress(`Fetching ${sheetList.length} days...because we care...`);
-
-                    const sheetPromises = sheetList.map(async (sheet) => {
-                        const url = `${API_URL}?type=sheet&name=${encodeURIComponent(sheet.name)}&date=${sheet.isoDate}`;
-                        try {
-                            const res = await fetch(url);
-                            return await res.json();
-                        } catch (e) {
-                            return null;
-                        }
-                    });
-
-                    const sheetsData = await Promise.all(sheetPromises);
-                    setProgress('Parsing raw data...');
+                    setProgress(`Displaying ${fullData.days.length} days of schedule data...`);
 
                     let allEvents = [];
                     let allStatuses = [];
-                    let latestFetchTime = null;
 
-                    sheetsData.forEach(dayData => {
-                        if (!dayData || !dayData.schedule || !dayData.schedule.data) return;
+                    fullData.days.forEach(dayData => {
+                        if (!dayData || !dayData.data) return;
 
-                        // Check fetchedAt
-                        if (dayData.metadata && dayData.metadata.fetchedAt) {
-                            const t = new Date(dayData.metadata.fetchedAt);
-                            if (!latestFetchTime || t > latestFetchTime) {
-                                latestFetchTime = t;
-                            }
-                        }
-
-                        const date = dayData.metadata.sourceSheet.date;
-                        const raw = dayData.schedule.data;
+                        const date = dayData.isoDate;
+                        const raw = dayData.data;
 
                         allEvents.push(...parseSupervision(raw.supervision, date));
                         allEvents.push(...parseFlying(raw.flying, date));
                         allEvents.push(...parseGround(raw.ground, date));
                         allEvents.push(...parseNA(raw.na, date));
-                        allEvents.push(...parseAcademics(raw.academics, rosterJson.roster, date));
+                        allEvents.push(...parseAcademics(raw.academics, fullData.roster, date));
 
                         if (raw.personnelNotes) {
                             allStatuses.push(...parsePersonnelStatus(raw.personnelNotes, date));
@@ -959,7 +1002,7 @@
 
                     setScheduleData(allEvents);
                     setPersonnelStatuses(allStatuses);
-                    setLastUpdated(latestFetchTime || new Date());
+                    setLastUpdated(fullData.metadata.currentAsOf ? new Date(fullData.metadata.currentAsOf) : new Date());
                     setLoading(false);
                 } catch (err) {
                     setError(err.message);
@@ -967,20 +1010,38 @@
                 }
             };
 
-            const handleRefresh = async () => {
+            // Quick refresh: re-fetch from cache (instant)
+            const handleQuickRefresh = async () => {
+                setShowRefreshMenu(false);
+                await loadData();
+            };
+
+            // Full refresh: force GAS to rescan the Whiteboard, then reload (30-60s)
+            const handleFullRefresh = async () => {
+                setShowRefreshMenu(false);
                 try {
                     setLoading(true);
-                    setProgress('Refreshing from Whiteboard 2.0 (bypassing cache)...');
-                    const batchRes = await fetch(`${API_URL}?type=batch&refresh=true`);
-                    const batchJson = await batchRes.json();
-                    if (batchJson.error) throw new Error(batchJson.message);
-                    setProgress('Cache refreshed. Reloading data...');
+                    setProgress('Rescanning Whiteboard... (30-60s)');
+                    const refreshRes = await fetch(`${API_URL}?forceRefresh=true`);
+                    const refreshJson = await refreshRes.json();
+                    if (refreshJson.error) throw new Error(refreshJson.message);
+                    setProgress('Whiteboard rescanned. Loading data...');
                     await loadData();
                 } catch (err) {
                     setError(err.message);
                     setLoading(false);
                 }
             };
+
+            const [showRefreshMenu, setShowRefreshMenu] = useState(false);
+
+            // Close refresh menu when clicking outside
+            useEffect(() => {
+                if (!showRefreshMenu) return;
+                const close = () => setShowRefreshMenu(false);
+                window.addEventListener('pointerdown', close);
+                return () => window.removeEventListener('pointerdown', close);
+            }, [showRefreshMenu]);
 
             useEffect(() => { loadData(); }, []);
 
@@ -1007,8 +1068,11 @@
             };
 
             const addGlobalListeners = () => {
-                window.addEventListener('pointermove', handleWindowPointerMove);
-                window.addEventListener('pointerup', handleWindowPointerUp);
+                // Store current handler references so removeEventListener gets the same ones
+                pointerListenersRef.current.move = handleWindowPointerMove;
+                pointerListenersRef.current.up = handleWindowPointerUp;
+                window.addEventListener('pointermove', pointerListenersRef.current.move);
+                window.addEventListener('pointerup', pointerListenersRef.current.up);
             };
 
             const handleHeaderMouseDown = (e, dayIndex) => {
@@ -1029,10 +1093,10 @@
 
             const handleContainerPointerDown = (e) => {
                 if (e.button !== 0) return;
-                if (e.target.classList.contains('gantt-container')) {
-                    if (e.offsetX > e.target.clientWidth || e.offsetY > e.target.clientHeight) return;
-                }
-                const container = e.currentTarget;
+                // Don't start pan if clicking on scrollbar area
+                const container = ganttContainerRef.current || e.currentTarget;
+                const rect = container.getBoundingClientRect();
+                if (e.clientX > rect.right - 14 || e.clientY > rect.bottom - 14) return;
                 dragRef.current = { mode: 'pan', startX: e.clientX, startY: e.clientY, scrollStartX: container.scrollLeft, scrollStartY: container.scrollTop, isDrag: false };
                 addGlobalListeners();
             };
@@ -1044,13 +1108,19 @@
                     const deltaX = e.clientX - startX;
                     const deltaY = e.clientY - startY;
                     if (!dragRef.current.isDrag && (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5)) dragRef.current.isDrag = true;
-                    const container = document.querySelector('.gantt-container');
-                    if (container) { container.scrollLeft = scrollStartX - deltaX; container.scrollTop = scrollStartY - deltaY; }
+                    const container = ganttContainerRef.current || document.querySelector('.gantt-container');
+                    if (container) {
+                        container.scrollLeft = scrollStartX - deltaX;
+                        container.scrollTop = scrollStartY - deltaY;
+                        // Sync left-panel names scroll (the scroll event listener also does this,
+                        // but syncing here too ensures no frame lag during fast drags)
+                        if (namesScrollRef.current) namesScrollRef.current.scrollTop = container.scrollTop;
+                    }
                     return;
                 }
                 const { mode, dayIndex, initialSelection, originTime } = dragRef.current;
-                const dayLeft = 180 + (dayIndex * 300);
-                const container = document.querySelector('.gantt-container');
+                const dayLeft = dayIndex * 300;
+                const container = ganttContainerRef.current || document.querySelector('.gantt-container');
                 const scrollLeft = container ? container.scrollLeft : 0;
                 const containerRect = container.getBoundingClientRect();
                 const columnVisualLeft = containerRect.left + dayLeft - scrollLeft;
@@ -1074,8 +1144,10 @@
                     }
                 }
                 dragRef.current = null;
-                window.removeEventListener('pointermove', handleWindowPointerMove);
-                window.removeEventListener('pointerup', handleWindowPointerUp);
+                window.removeEventListener('pointermove', pointerListenersRef.current.move);
+                window.removeEventListener('pointerup', pointerListenersRef.current.up);
+                pointerListenersRef.current.move = null;
+                pointerListenersRef.current.up = null;
             };
 
             const personnelList = useMemo(() => {
@@ -1149,32 +1221,59 @@
                                 {Object.keys(roster).map(cat => (<option key={cat} value={cat}>{cat}</option>))}
                                 <option value="Custom" disabled>Custom Selection</option>
                             </select>
-                            <button onClick={handleRefresh} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
+                            <div style={{ position: 'relative' }} onPointerDown={e => e.stopPropagation()}>
+                                <button onClick={() => setShowRefreshMenu(!showRefreshMenu)} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
+                                {showRefreshMenu && (
+                                    <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: '#1e1e3a', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, overflow: 'hidden', zIndex: 70, minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                                        <button onClick={handleQuickRefresh} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#e5e7eb', fontSize: '0.8rem', cursor: 'pointer', textAlign: 'left' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.08)'} onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                                            <span style={{ fontSize: '1.1rem' }}>&#9889;</span>
+                                            <div><div style={{ fontWeight: 600 }}>Quick Refresh</div><div style={{ fontSize: '0.65rem', color: '#9ca3af' }}>Reload from cache (instant)</div></div>
+                                        </button>
+                                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}></div>
+                                        <button onClick={handleFullRefresh} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#e5e7eb', fontSize: '0.8rem', cursor: 'pointer', textAlign: 'left' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.08)'} onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                                            <span style={{ fontSize: '1.1rem' }}>&#128472;</span>
+                                            <div><div style={{ fontWeight: 600 }}>Rescan Whiteboard</div><div style={{ fontSize: '0.65rem', color: '#9ca3af' }}>Full re-read from Sheets (30-60s)</div></div>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                     {loading ? (<div className="flex flex-col items-center justify-center flex-1"><div className="spinner mb-4 w-10 h-10 border-4"></div><div className="text-blue-400 font-bold tracking-widest uppercase text-xs animate-pulse">{progress}</div></div>) : (
-                        <div className="gantt-container" onPointerDown={handleContainerPointerDown}>
-                            <div className="gantt-grid" style={{ gridTemplateColumns: `180px repeat(${dates.length}, 300px)` }}>
-                                <div className="gantt-header gantt-name-header" onPointerDown={(e) => e.stopPropagation()}>PERSONNEL</div>
-                                {dates.map((date, idx) => {
-                                    return (
-                                        <div key={date} className="gantt-header" onPointerDown={(e) => { e.stopPropagation(); handleHeaderMouseDown(e, idx); }}>
-                                            {formatHeaderDate(date)}
-                                            {timelineSelection && timelineSelection.dayIndex === idx && (<TimelineHeaderHandles selection={timelineSelection} onUpdate={handleOverlayDragStart} />)}
-                                        </div>
-                                    );
-                                })}
-                                {personnelList.map((person, idx) => (
-                                    <React.Fragment key={`${person.name}-${idx}`}>
-                                        <div className="gantt-row-name border-b border-gray-800/50"><div><div className="font-bold text-white leading-tight">{person.name}</div><div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div></div></div>
-                                        {dates.map(date => {
-                                            const cellEvents = scheduleData.filter(e => e.person === person.name && e.date === date && visibleTypes.has(e.type));
-                                            const status = visibleTypes.has('Notes') ? personnelStatuses.find(s => s.person === person.name && s.date === date) : null;
-                                            return (<div key={`${person.name}-${date}`} className="gantt-cell-container border-b border-gray-800/50 border-r border-gray-800/30"><GanttCell events={cellEvents} status={status} onEventClick={(ev) => { setSelectedEvent(ev); }} /></div>);
-                                        })}
-                                    </React.Fragment>
-                                ))}
-                                {timelineSelection && (<TimelineMarkerLine selection={timelineSelection} dayIndex={timelineSelection.dayIndex} />)}
+                        <div className="gantt-wrapper">
+                            {/* Left panel: frozen personnel names */}
+                            <div className="gantt-names-panel">
+                                <div className="gantt-name-header" onPointerDown={(e) => e.stopPropagation()}>PERSONNEL</div>
+                                <div className="gantt-names-scroll" ref={namesScrollRef}>
+                                    {personnelList.map((person, idx) => (
+                                        <div key={`name-${person.name}-${idx}`} className="gantt-row-name"><div><div className="font-bold text-white leading-tight">{person.name}</div><div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div></div></div>
+                                    ))}
+                                </div>
+                            </div>
+                            {/* Right panel: scrollable schedule grid */}
+                            <div className="gantt-container" ref={ganttContainerRef} onPointerDown={handleContainerPointerDown}>
+                                <div className="gantt-grid" style={{ gridTemplateColumns: `repeat(${dates.length}, 300px)` }}>
+                                    {dates.map((date, idx) => {
+                                        return (
+                                            <div key={date} className="gantt-header" onPointerDown={(e) => { e.stopPropagation(); handleHeaderMouseDown(e, idx); }}>
+                                                {formatHeaderDate(date)}
+                                                {timelineSelection && timelineSelection.dayIndex === idx && (<TimelineHeaderHandles selection={timelineSelection} onUpdate={handleOverlayDragStart} />)}
+                                            </div>
+                                        );
+                                    })}
+                                    {personnelList.map((person, idx) => (
+                                        <React.Fragment key={`${person.name}-${idx}`}>
+                                            {dates.map(date => {
+                                                const cellEvents = scheduleData.filter(e => e.person === person.name && e.date === date && visibleTypes.has(e.type));
+                                                const status = visibleTypes.has('Notes') ? personnelStatuses.find(s => s.person === person.name && s.date === date) : null;
+                                                return (<div key={`${person.name}-${date}`} className="gantt-cell-container"><GanttCell events={cellEvents} status={status} onEventClick={(ev) => { setSelectedEvent(ev); }} /></div>);
+                                            })}
+                                        </React.Fragment>
+                                    ))}
+                                    {/* Timeline marker: absolutely positioned within the grid (position:relative).
+                                        Absolute grid children don't create implicit rows/columns. */}
+                                    {timelineSelection && (<TimelineMarkerLine selection={timelineSelection} dayIndex={timelineSelection.dayIndex} />)}
+                                </div>
                             </div>
                         </div>
                     )}
