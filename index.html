@@ -1,4 +1,4 @@
-<!-- Version 6.0 - Single-call API via TPS Schedule v6.0 ?mode=full -->
+<!-- Version 6.3 - Workload tracking, cancelled event display, today highlight -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -415,6 +415,31 @@
         ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
         ::-webkit-scrollbar-corner { background: #1a1a2e; }
+
+        /* Now line — vertical dashed line at current time on today's column */
+        .now-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            border-left: 1px dashed rgba(255, 255, 255, 0.3);
+            pointer-events: none;
+            z-index: 36;
+        }
+
+        /* Person schedule modal (wider than default modal) */
+        .person-modal-content {
+            background: #1a1a2e;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 700px;
+            width: 95%;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+        }
     </style>
 </head>
 <body>
@@ -490,6 +515,15 @@
             return Math.max(0, Math.min(100, ((minutes - rangeStart) / totalMin) * 100));
         };
 
+        const getWeekBounds = (refDate) => {
+            const d = new Date(refDate);
+            const day = d.getDay(); // 0=Sun
+            const sun = new Date(d); sun.setDate(d.getDate() - day);
+            const sat = new Date(sun); sat.setDate(sun.getDate() + 6);
+            const mon = new Date(sun); mon.setDate(sun.getDate() + 1);
+            return { sun, sat, mon };
+        };
+
         const getMinutesFromClick = (e, rect) => {
             const rangeStart = 6 * 60;
             const rangeEnd = 18 * 60;
@@ -533,7 +567,6 @@
                 const eventName = row[5];
                 const model = row[0];
                 if (!start || (!eventName && !model) || eventName === 'Event') return;
-                if (String(row[COL.flying.cancelled]).toUpperCase() === 'TRUE') return;
 
                 const crew = row.slice(...COL.flying.crew).filter(c => c && c.trim());
                 crew.forEach(person => {
@@ -563,7 +596,6 @@
                 const eventName = row[0];
                 const start = row[1];
                 if (!eventName || !start || eventName === 'Events') return;
-                if (String(row[COL.ground.cancelled]).toUpperCase() === 'TRUE') return;
 
                 const people = row.slice(...COL.ground.people).filter(p => p && p.trim());
                 people.forEach(person => {
@@ -791,10 +823,11 @@
                             }
                         }
 
+                        const isCancelled = ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
                         return (
-                            <div key={`${laneIdx}-${evIdx}`} className={`event-bar event-${ev.type.toLowerCase()}`} style={{ ...pos, top: `${laneIdx * laneHeight + 2}px` }} title={`${ev.start}-${ev.end}: ${ev.fullTitle || ev.title}`} onClick={(e) => { e.stopPropagation(); onEventClick(ev); }}>
+                            <div key={`${laneIdx}-${evIdx}`} className={`event-bar event-${ev.type.toLowerCase()}`} style={{ ...pos, top: `${laneIdx * laneHeight + 2}px`, ...(isCancelled ? { opacity: 0.4 } : {}) }} title={`${ev.start}-${ev.end}: ${ev.fullTitle || ev.title}${isCancelled ? ' [CANCELLED]' : ''}`} onClick={(e) => { e.stopPropagation(); onEventClick(ev); }}>
                                 {flightInner}
-                                <span className="event-bar-text truncate relative z-10">{ev.title}</span>
+                                <span className="event-bar-text truncate relative z-10" style={isCancelled ? { textDecoration: 'line-through' } : {}}>{ev.title}</span>
                             </div>
                         );
                     }))}
@@ -909,6 +942,91 @@
             );
         };
 
+        const PersonModal = ({ person, scheduleData, onClose }) => {
+            if (!person) return null;
+
+            const todayPacific = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+            const week1 = getWeekBounds(todayPacific);
+            const nextSun = new Date(week1.sat); nextSun.setDate(week1.sat.getDate() + 1);
+            const week2 = getWeekBounds(nextSun);
+
+            const toISO = (d) => {
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${day}`;
+            };
+
+            const w1Sun = toISO(week1.sun); const w1Sat = toISO(week1.sat);
+            const w2Sun = toISO(week2.sun); const w2Sat = toISO(week2.sat);
+
+            const formatWeekLabel = (mon) => `${mon.getMonth() + 1}/${String(mon.getDate()).padStart(2, '0')}`;
+
+            const personEvents = scheduleData.filter(ev => ev.person === person.name);
+
+            const w1Events = personEvents.filter(ev => ev.date >= w1Sun && ev.date <= w1Sat)
+                .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0)));
+            const w2Events = personEvents.filter(ev => ev.date >= w2Sun && ev.date <= w2Sat)
+                .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0)));
+
+            const typeBadgeStyle = (type) => {
+                const colors = { Flying: '#10b981', Ground: '#f59e0b', NA: '#ef4444', Supervision: '#8b5cf6', Academics: '#3b82f6', Other: '#6b7280' };
+                const c = colors[type] || '#6b7280';
+                return { background: c + '33', color: c, border: `1px solid ${c}`, borderRadius: 3, padding: '1px 4px', fontSize: '0.6rem', fontWeight: 'bold', whiteSpace: 'nowrap' };
+            };
+
+            const renderEventRow = (ev) => {
+                const isCancelled = ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
+                return (
+                    <div key={`${ev.date}-${ev.type}-${ev.start}-${ev.title}`} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', opacity: isCancelled ? 0.5 : 1 }}>
+                        <span style={{ color: '#6b7280', fontSize: '0.65rem', minWidth: 36 }}>{ev.start || '--:--'}</span>
+                        <span style={typeBadgeStyle(ev.type)}>{ev.type === 'Flying' ? 'Fly' : ev.type === 'Ground' ? 'Gnd' : ev.type === 'Academics' ? 'Acad' : ev.type === 'Supervision' ? 'Supv' : ev.type}</span>
+                        <span style={{ color: '#e5e7eb', fontSize: '0.7rem', textDecoration: isCancelled ? 'line-through' : 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.fullTitle || ev.title}</span>
+                        <span style={{ color: '#4b5563', fontSize: '0.6rem', flexShrink: 0 }}>{ev.date ? ev.date.slice(5).replace('-', '/') : ''}</span>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="person-modal-content" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 className="text-xl font-bold text-white">{person.name}</h2>
+                                <div className="text-xs text-gray-500 uppercase tracking-wider">{person.category} — Weekly Schedule</div>
+                            </div>
+                            <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl">&times;</button>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, overflow: 'hidden', flex: 1, minHeight: 0 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                                <div style={{ fontWeight: 'bold', color: '#3b82f6', fontSize: '0.75rem', borderBottom: '1px solid rgba(59,130,246,0.3)', paddingBottom: 4, marginBottom: 6, flexShrink: 0 }}>
+                                    Week of {formatWeekLabel(week1.mon)}
+                                </div>
+                                <div style={{ overflowY: 'auto', flex: 1 }}>
+                                    {w1Events.length === 0
+                                        ? <div style={{ color: '#4b5563', fontSize: '0.7rem', fontStyle: 'italic', paddingTop: 4 }}>No events this week</div>
+                                        : w1Events.map(renderEventRow)
+                                    }
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                                <div style={{ fontWeight: 'bold', color: '#3b82f6', fontSize: '0.75rem', borderBottom: '1px solid rgba(59,130,246,0.3)', paddingBottom: 4, marginBottom: 6, flexShrink: 0 }}>
+                                    Week of {formatWeekLabel(week2.mon)}
+                                </div>
+                                <div style={{ overflowY: 'auto', flex: 1 }}>
+                                    {w2Events.length === 0
+                                        ? <div style={{ color: '#4b5563', fontSize: '0.7rem', fontStyle: 'italic', paddingTop: 4 }}>No events this week</div>
+                                        : w2Events.map(renderEventRow)
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                        <button onClick={onClose} className="mt-4 w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors font-bold text-sm">Close</button>
+                    </div>
+                </div>
+            );
+        };
+
         function App() {
             const [roster, setRoster] = useState({});
             const [dates, setDates] = useState([]);
@@ -923,6 +1041,7 @@
             const [selectedEvent, setSelectedEvent] = useState(null);
             const [timelineSelection, setTimelineSelection] = useState(null);
             const [lastUpdated, setLastUpdated] = useState(null);
+            const [selectedPerson, setSelectedPerson] = useState(null);
             const [visibleTypes, setVisibleTypes] = useState(new Set(['Supervision', 'Flying', 'Ground', 'NA', 'Academics', 'Notes']));
             const dragRef = useRef(null);
             const namesScrollRef = useRef(null);
@@ -1157,11 +1276,55 @@
                 });
             }, [roster, visiblePersonnel]);
 
+            // Workload counters: Flying + Ground events per person per week (current + next)
+            const workloadByPerson = useMemo(() => {
+                const todayPacific = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+                const week1 = getWeekBounds(todayPacific);
+                const nextSun = new Date(week1.sat); nextSun.setDate(week1.sat.getDate() + 1);
+                const week2 = getWeekBounds(nextSun);
+
+                const toISO = (d) => {
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${day}`;
+                };
+
+                const w1Sun = toISO(week1.sun); const w1Sat = toISO(week1.sat);
+                const w2Sun = toISO(week2.sun); const w2Sat = toISO(week2.sat);
+
+                const formatWeekLabel = (mon) => {
+                    return `${mon.getMonth() + 1}/${String(mon.getDate()).padStart(2, '0')}`;
+                };
+
+                const w1Label = formatWeekLabel(week1.mon);
+                const w2Label = formatWeekLabel(week2.mon);
+
+                const result = {};
+                scheduleData.forEach(ev => {
+                    if (ev.type !== 'Flying' && ev.type !== 'Ground') return;
+                    const name = ev.person;
+                    if (!result[name]) result[name] = {
+                        w1: { fly: 0, gnd: 0, label: w1Label },
+                        w2: { fly: 0, gnd: 0, label: w2Label }
+                    };
+                    const d = ev.date;
+                    if (d >= w1Sun && d <= w1Sat) {
+                        if (ev.type === 'Flying') result[name].w1.fly++;
+                        else result[name].w1.gnd++;
+                    } else if (d >= w2Sun && d <= w2Sat) {
+                        if (ev.type === 'Flying') result[name].w2.fly++;
+                        else result[name].w2.gnd++;
+                    }
+                });
+                return result;
+            }, [scheduleData]);
+
             // UPDATED DATE FORMATTING (UTC)
-            const formatHeaderDate = (isoDate) => {
+            const formatHeaderDate = (isoDate, isToday) => {
                 const [y, m, d] = isoDate.split('-').map(Number);
                 const date = new Date(Date.UTC(y, m - 1, d));
-                
+
                 const weekday = date.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
                 const month = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
                 const dayNum = date.getUTCDate();
@@ -1169,8 +1332,8 @@
                 return (
                     <div className="flex flex-col h-full justify-between w-full pointer-events-none">
                         <div className="flex flex-col items-center">
-                            <span className="font-bold text-white uppercase text-xs">{weekday}</span>
-                            <span className="text-gray-400">{dayNum} {month}</span>
+                            <span className={`font-bold uppercase text-xs ${isToday ? 'text-blue-400' : 'text-white'}`}>{weekday}</span>
+                            <span className={isToday ? 'text-blue-300' : 'text-gray-400'}>{dayNum} {month}</span>
                         </div>
                         <div className="header-time-scale">
                             <span style={{ position: 'absolute', left: '0%' }}>6</span>
@@ -1189,6 +1352,7 @@
                 <div className="flex flex-col h-full">
                     <Modal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
                     <FilterModal isOpen={isFilterOpen} onClose={() => setIsFilterOpen(false)} roster={roster} currentSelection={visiblePersonnel} onApply={handleFilterApply} />
+                    <PersonModal person={selectedPerson} scheduleData={scheduleData} onClose={() => setSelectedPerson(null)} />
                     <div className="glass-header flex justify-between items-center">
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">TPS CREW RAINBOW</h1>
@@ -1246,22 +1410,61 @@
                             <div className="gantt-names-panel">
                                 <div className="gantt-name-header" onPointerDown={(e) => e.stopPropagation()}>PERSONNEL</div>
                                 <div className="gantt-names-scroll" ref={namesScrollRef}>
-                                    {personnelList.map((person, idx) => (
-                                        <div key={`name-${person.name}-${idx}`} className="gantt-row-name"><div><div className="font-bold text-white leading-tight">{person.name}</div><div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div></div></div>
-                                    ))}
+                                    {personnelList.map((person, idx) => {
+                                        const wl = workloadByPerson[person.name];
+                                        const hasW1 = wl && (wl.w1.fly > 0 || wl.w1.gnd > 0);
+                                        const hasW2 = wl && (wl.w2.fly > 0 || wl.w2.gnd > 0);
+                                        return (
+                                            <div key={`name-${person.name}-${idx}`} className="gantt-row-name" style={{ justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setSelectedPerson(person)}>
+                                                <div>
+                                                    <div className="font-bold text-white leading-tight">{person.name}</div>
+                                                    <div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div>
+                                                </div>
+                                                {wl && (hasW1 || hasW2) && (
+                                                    <div style={{ fontSize: '0.6rem', textAlign: 'right', lineHeight: '1.3', flexShrink: 0, marginLeft: 4 }}>
+                                                        {hasW1 && (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
+                                                                <span style={{ color: '#9ca3af' }}>{wl.w1.label}</span>
+                                                                <span style={{ color: '#10b981' }}>{wl.w1.fly}</span>
+                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
+                                                                <span style={{ color: '#f59e0b' }}>{wl.w1.gnd}</span>
+                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }}></span>
+                                                            </div>
+                                                        )}
+                                                        {hasW2 && (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
+                                                                <span style={{ color: '#9ca3af' }}>{wl.w2.label}</span>
+                                                                <span style={{ color: '#10b981' }}>{wl.w2.fly}</span>
+                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
+                                                                <span style={{ color: '#f59e0b' }}>{wl.w2.gnd}</span>
+                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }}></span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
                             {/* Right panel: scrollable schedule grid */}
                             <div className="gantt-container" ref={ganttContainerRef} onPointerDown={handleContainerPointerDown}>
                                 <div className="gantt-grid" style={{ gridTemplateColumns: `repeat(${dates.length}, 300px)` }}>
-                                    {dates.map((date, idx) => {
-                                        return (
-                                            <div key={date} className="gantt-header" onPointerDown={(e) => { e.stopPropagation(); handleHeaderMouseDown(e, idx); }}>
-                                                {formatHeaderDate(date)}
-                                                {timelineSelection && timelineSelection.dayIndex === idx && (<TimelineHeaderHandles selection={timelineSelection} onUpdate={handleOverlayDragStart} />)}
-                                            </div>
-                                        );
-                                    })}
+                                    {(() => {
+                                        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+                                        return dates.map((date, idx) => {
+                                            const isToday = date === todayStr;
+                                            const todayHeaderStyle = isToday
+                                                ? { borderTop: '3px solid #3b82f6', background: 'rgba(59, 130, 246, 0.15)' }
+                                                : {};
+                                            return (
+                                                <div key={date} className="gantt-header" style={todayHeaderStyle} onPointerDown={(e) => { e.stopPropagation(); handleHeaderMouseDown(e, idx); }}>
+                                                    {formatHeaderDate(date, isToday)}
+                                                    {timelineSelection && timelineSelection.dayIndex === idx && (<TimelineHeaderHandles selection={timelineSelection} onUpdate={handleOverlayDragStart} />)}
+                                                </div>
+                                            );
+                                        });
+                                    })()}
                                     {personnelList.map((person, idx) => (
                                         <React.Fragment key={`${person.name}-${idx}`}>
                                             {dates.map(date => {
@@ -1274,6 +1477,17 @@
                                     {/* Timeline marker: absolutely positioned within the grid (position:relative).
                                         Absolute grid children don't create implicit rows/columns. */}
                                     {timelineSelection && (<TimelineMarkerLine selection={timelineSelection} dayIndex={timelineSelection.dayIndex} />)}
+                                    {/* Now line: dashed vertical at current time on today's column */}
+                                    {(() => {
+                                        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+                                        const todayIdx = dates.indexOf(todayStr);
+                                        if (todayIdx === -1) return null;
+                                        const nowPacific = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+                                        const nowMinutes = nowPacific.getHours() * 60 + nowPacific.getMinutes();
+                                        if (nowMinutes < 6 * 60 || nowMinutes > 18 * 60) return null;
+                                        const leftPx = todayIdx * 300 + getLeftPercent(nowMinutes) * 3;
+                                        return <div className="now-line" style={{ left: `${leftPx}px` }} />;
+                                    })()}
                                 </div>
                             </div>
                         </div>
