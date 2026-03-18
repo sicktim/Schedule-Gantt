@@ -962,7 +962,7 @@
 
             const formatWeekLabel = (mon) => `${mon.getMonth() + 1}/${String(mon.getDate()).padStart(2, '0')}`;
 
-            const personEvents = scheduleData.filter(ev => ev.person === person.name);
+            const personEvents = scheduleData.filter(ev => ev.person === person.name && ev.type !== 'Academics');
 
             const w1Events = personEvents.filter(ev => ev.date >= w1Sun && ev.date <= w1Sat)
                 .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (timeToMinutes(a.start) || 0) - (timeToMinutes(b.start) || 0)));
@@ -1042,6 +1042,8 @@
             const [timelineSelection, setTimelineSelection] = useState(null);
             const [lastUpdated, setLastUpdated] = useState(null);
             const [selectedPerson, setSelectedPerson] = useState(null);
+            const [showW1, setShowW1] = useState(true);
+            const [showW2, setShowW2] = useState(true);
             const [visibleTypes, setVisibleTypes] = useState(new Set(['Supervision', 'Flying', 'Ground', 'NA', 'Academics', 'Notes']));
             const dragRef = useRef(null);
             const namesScrollRef = useRef(null);
@@ -1408,36 +1410,47 @@
                         <div className="gantt-wrapper">
                             {/* Left panel: frozen personnel names */}
                             <div className="gantt-names-panel">
-                                <div className="gantt-name-header" onPointerDown={(e) => e.stopPropagation()}>PERSONNEL</div>
+                                <div className="gantt-name-header" style={{ flexDirection: 'column', height: 54, padding: '4px 8px', gap: 0 }} onPointerDown={(e) => e.stopPropagation()}>
+                                    <span style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>PERSONNEL</span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 2 }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#9ca3af', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={showW1} onChange={() => setShowW1(v => !v)} style={{ width: 10, height: 10, accentColor: '#3b82f6' }} />
+                                            This Wk
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#9ca3af', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={showW2} onChange={() => setShowW2(v => !v)} style={{ width: 10, height: 10, accentColor: '#3b82f6' }} />
+                                            Next Wk
+                                        </label>
+                                    </div>
+                                </div>
                                 <div className="gantt-names-scroll" ref={namesScrollRef}>
                                     {personnelList.map((person, idx) => {
-                                        const wl = workloadByPerson[person.name];
-                                        const hasW1 = wl && (wl.w1.fly > 0 || wl.w1.gnd > 0);
-                                        const hasW2 = wl && (wl.w2.fly > 0 || wl.w2.gnd > 0);
+                                        const wl = workloadByPerson[person.name] || {
+                                            w1: { fly: 0, gnd: 0, label: '' },
+                                            w2: { fly: 0, gnd: 0, label: '' }
+                                        };
                                         return (
                                             <div key={`name-${person.name}-${idx}`} className="gantt-row-name" style={{ justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setSelectedPerson(person)}>
                                                 <div>
                                                     <div className="font-bold text-white leading-tight">{person.name}</div>
                                                     <div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div>
                                                 </div>
-                                                {wl && (hasW1 || hasW2) && (
+                                                {(showW1 || showW2) && (
                                                     <div style={{ fontSize: '0.6rem', textAlign: 'right', lineHeight: '1.3', flexShrink: 0, marginLeft: 4 }}>
-                                                        {hasW1 && (
+                                                        {showW1 && wl.w1.label && (
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
                                                                 <span style={{ color: '#9ca3af' }}>{wl.w1.label}</span>
                                                                 <span style={{ color: '#10b981' }}>{wl.w1.fly}</span>
-                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
+                                                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
                                                                 <span style={{ color: '#f59e0b' }}>{wl.w1.gnd}</span>
-                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }}></span>
                                                             </div>
                                                         )}
-                                                        {hasW2 && (
+                                                        {showW2 && wl.w2.label && (
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
                                                                 <span style={{ color: '#9ca3af' }}>{wl.w2.label}</span>
                                                                 <span style={{ color: '#10b981' }}>{wl.w2.fly}</span>
-                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
+                                                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
                                                                 <span style={{ color: '#f59e0b' }}>{wl.w2.gnd}</span>
-                                                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }}></span>
                                                             </div>
                                                         )}
                                                     </div>
@@ -1455,7 +1468,7 @@
                                         return dates.map((date, idx) => {
                                             const isToday = date === todayStr;
                                             const todayHeaderStyle = isToday
-                                                ? { borderTop: '3px solid #3b82f6', background: 'rgba(59, 130, 246, 0.15)' }
+                                                ? { borderTop: '3px solid #3b82f6', background: 'rgb(40, 40, 81)' }
                                                 : {};
                                             return (
                                                 <div key={date} className="gantt-header" style={todayHeaderStyle} onPointerDown={(e) => { e.stopPropagation(); handleHeaderMouseDown(e, idx); }}>
