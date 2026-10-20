@@ -1224,7 +1224,7 @@
                 syncHeights();
                 window.addEventListener('resize', syncHeights);
                 return () => window.removeEventListener('resize', syncHeights);
-            }, [loading, scheduleData, visibleTypes, visiblePersonnel, dates, selectedCategory]);
+            }, [loading, scheduleData, visibleTypes, visiblePersonnel, dates, selectedCats, customSel]);
 
             const loadData = async () => {
                 try {
