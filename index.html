@@ -1,4 +1,4 @@
-<!-- Version 6.3 - Workload tracking, cancelled event display, today highlight -->
+<!-- Version 6.4 - Zoom levels, multi-group filter, person-row separators, conflict strips w/ hover detail, day-grouped person modal, contrast pass -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -124,8 +124,10 @@
             display: flex;
             align-items: center;
             min-height: 38px;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-            border-right: 1px solid rgba(255,255,255,0.15);
+            /* Row separator (ported from Interactive Scheduler rainbow): makes
+               "whose line is this bar on" readable at a glance */
+            border-bottom: 1px solid rgba(255,255,255,0.32);
+            border-right: 1px solid rgba(255,255,255,0.2);
             user-select: none;
             box-sizing: border-box;
         }
@@ -181,7 +183,7 @@
             width: 100%;
             height: 14px;
             font-size: 0.65rem;
-            color: rgba(255, 255, 255, 0.5);
+            color: rgba(255, 255, 255, 0.75);
             margin-top: auto;
             pointer-events: none;
         }
@@ -192,8 +194,34 @@
             position: relative;
             padding: 0;
             min-height: 38px;
-            border-right: 1px solid rgba(255,255,255,0.05);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
+            border-right: 1px solid rgba(255,255,255,0.12);
+            /* Row separator matches .gantt-row-name so lines align across panels */
+            border-bottom: 1px solid rgba(255,255,255,0.32);
+        }
+
+        /* Conflict strip (ported from Interactive Scheduler rainbow): red segment
+           at the top of a cell spanning the time where two of this person's
+           events overlap. Hover shows what conflicts. */
+        .gantt-conflict-strip {
+            position: absolute;
+            top: 0; height: 4px;
+            background: #ef4444;
+            box-shadow: 0 0 5px rgba(239,68,68,0.9);
+            z-index: 7;
+            cursor: help;
+        }
+
+        /* Conflict hover tooltip (fixed, clamped to viewport) */
+        .conflict-tip {
+            position: fixed;
+            z-index: 200;
+            background: rgba(20,20,40,0.97);
+            border: 1px solid rgba(239,68,68,0.6);
+            border-radius: 6px;
+            padding: 6px 10px;
+            pointer-events: none;
+            max-width: 300px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.6);
         }
 
         .event-bar {
@@ -364,7 +392,7 @@
         .filter-group-header {
             font-size: 0.75rem;
             text-transform: uppercase;
-            color: #9ca3af;
+            color: #c3cbd6;
             padding: 8px 4px 4px 4px;
             font-weight: bold;
             border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -531,6 +559,54 @@
             const x = e.clientX - rect.left;
             const percent = Math.max(0, Math.min(1, x / rect.width));
             return Math.round(rangeStart + (percent * totalMin));
+        };
+
+        // Zoom levels: 1 out + default + 4 in. Percentages roughly track the
+        // actual column-width scale (base day column = 300px).
+        const ZOOM_LEVELS = [75, 100, 125, 150, 200, 300];
+        const BASE_DAY_WIDTH = 300;
+
+        // --- CONFLICT DETECTION (ported from Interactive Scheduler rainbow) ---
+        const isCancelledEv = (ev) => ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
+
+        // Overlap segments among one person's events this day, with the pair of
+        // events behind each segment (for the hover tooltip)
+        const computeConflictSegs = (evs) => {
+            const timed = evs
+                .filter(e => !isCancelledEv(e))
+                .map(e => ({ ev: e, s: timeToMinutes(e.start), e2: timeToMinutes(e.end) }))
+                .filter(t => t.s != null && t.e2 != null && t.e2 > t.s);
+            const segs = [];
+            for (let a = 0; a < timed.length; a++) {
+                for (let b = a + 1; b < timed.length; b++) {
+                    const os = Math.max(timed[a].s, timed[b].s);
+                    const oe = Math.min(timed[a].e2, timed[b].e2);
+                    if (oe > os) segs.push({ s: os, e: oe, pair: [timed[a].ev, timed[b].ev] });
+                }
+            }
+            return segs;
+        };
+
+        // Other events of the same person/day that overlap this one
+        const conflictsForEvent = (ev, evs) => {
+            const s = timeToMinutes(ev.start);
+            const e = timeToMinutes(ev.end);
+            if (s == null || e == null || e <= s || isCancelledEv(ev)) return [];
+            return evs.filter(o => {
+                if (o === ev || isCancelledEv(o)) return false;
+                const os = timeToMinutes(o.start);
+                const oe = timeToMinutes(o.end);
+                return os != null && oe != null && oe > os && Math.min(e, oe) > Math.max(s, os);
+            });
+        };
+
+        // "Mon, 19 Oct" day label for the person-schedule modal (UTC like headers)
+        const dayLabel = (iso) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            const dt = new Date(Date.UTC(y, m - 1, d));
+            const weekday = dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+            const month = dt.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+            return `${weekday}, ${dt.getUTCDate()} ${month}`;
         };
 
         // --- PARSING LOGIC (API DATA STRUCTURE) ---
@@ -735,21 +811,20 @@
             return null;
         };
 
-        const TimelineMarkerLine = ({ selection, dayIndex }) => {
+        const TimelineMarkerLine = ({ selection, dayIndex, dayWidth }) => {
             if (!selection || selection.dayIndex !== dayIndex) return null;
             const { type, start, end } = selection;
-            // leftOffset: name column is now OUTSIDE the grid, so offset is just dayIndex * 300px
-            const leftOffset = dayIndex * 300;
+            // leftOffset: name column is OUTSIDE the grid, so offset is dayIndex * dayWidth
+            const leftOffset = dayIndex * dayWidth;
             if (type === 'marker') {
                 const percent = getLeftPercent(start);
-                return <div className="timeline-grid-line" style={{ left: `${leftOffset + (percent * 3)}px` }} />;
+                return <div className="timeline-grid-line" style={{ left: `${leftOffset + (percent / 100) * dayWidth}px` }} />;
             }
             if (type === 'range') {
                 const sPercent = getLeftPercent(start);
                 const ePercent = getLeftPercent(end);
-                const widthPercent = ePercent - sPercent;
-                const leftPx = leftOffset + (sPercent * 3);
-                const widthPx = widthPercent * 3;
+                const leftPx = leftOffset + (sPercent / 100) * dayWidth;
+                const widthPx = ((ePercent - sPercent) / 100) * dayWidth;
                 return <div className="timeline-grid-range" style={{ left: `${leftPx}px`, width: `${widthPx}px` }} />;
             }
             return null;
@@ -777,6 +852,16 @@
                             </div>
                             {event.details && (<div className="bg-white/5 p-3 rounded-lg"><div className="text-xs text-gray-500 uppercase font-bold mb-1">Details</div><div className="text-sm text-gray-300">{event.details}</div></div>)}
                             {event.notes && (<div className="bg-yellow-500/10 p-3 rounded-lg border border-yellow-500/20"><div className="text-xs text-yellow-500 uppercase font-bold mb-1">Notes</div><div className="text-sm text-yellow-200 italic">{event.notes}</div></div>)}
+                            {event.conflicts && event.conflicts.length > 0 && (
+                                <div className="p-3 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)' }}>
+                                    <div className="text-xs uppercase font-bold mb-1" style={{ color: '#f87171' }}>Conflicts with ({event.conflicts.length})</div>
+                                    {event.conflicts.map((c, i) => (
+                                        <div key={i} className="text-sm" style={{ color: '#fca5a5' }}>
+                                            {c.start}–{c.end || '?'}&nbsp;&nbsp;{c.fullTitle || c.title}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                         <button onClick={onClose} className="mt-6 w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors font-bold">Close</button>
                     </div>
@@ -784,7 +869,7 @@
             );
         };
 
-        const GanttCell = ({ events, status, onEventClick }) => {
+        const GanttCell = ({ events, allEvents, status, showConflicts, onEventClick, onConflictHover }) => {
             const lanes = useMemo(() => {
                 const rows = [];
                 const sorted = [...events].sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
@@ -804,8 +889,26 @@
             const laneHeight = 22;
             const noteHeight = status ? 14 : 0;
             const calculatedHeight = Math.max(minHeight, (lanes.length * laneHeight) + noteHeight + 4);
+
+            // Conflict strips from ALL of this person's events today (not just the
+            // type-filtered ones — a conflict is real even when a filter hides one side)
+            const conflictSegs = useMemo(() => {
+                if (!showConflicts) return [];
+                return computeConflictSegs(allEvents || events);
+            }, [showConflicts, allEvents, events]);
+
             return (
                 <div className="relative w-full h-full" style={{ minHeight: `${calculatedHeight}px` }}>
+                    {conflictSegs.map((seg, ci) => {
+                        const l = getLeftPercent(seg.s);
+                        const w = Math.max(0.5, getLeftPercent(seg.e) - l);
+                        return (
+                            <div key={`cf${ci}`} className="gantt-conflict-strip"
+                                style={{ left: `${l}%`, width: `${w}%` }}
+                                onMouseEnter={(e) => onConflictHover && onConflictHover(e, seg)}
+                                onMouseLeave={() => onConflictHover && onConflictHover(null)} />
+                        );
+                    })}
                     {lanes.map((lane, laneIdx) => lane.map((ev, evIdx) => {
                         const pos = getPosition(ev.start, ev.end);
                         
@@ -823,9 +926,9 @@
                             }
                         }
 
-                        const isCancelled = ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
+                        const isCancelled = isCancelledEv(ev);
                         return (
-                            <div key={`${laneIdx}-${evIdx}`} className={`event-bar event-${ev.type.toLowerCase()}`} style={{ ...pos, top: `${laneIdx * laneHeight + 2}px`, ...(isCancelled ? { opacity: 0.4 } : {}) }} title={`${ev.start}-${ev.end}: ${ev.fullTitle || ev.title}${isCancelled ? ' [CANCELLED]' : ''}`} onClick={(e) => { e.stopPropagation(); onEventClick(ev); }}>
+                            <div key={`${laneIdx}-${evIdx}`} className={`event-bar event-${ev.type.toLowerCase()}`} style={{ ...pos, top: `${laneIdx * laneHeight + 2}px`, ...(isCancelled ? { opacity: 0.4 } : {}) }} title={`${ev.start}-${ev.end}: ${ev.fullTitle || ev.title}${isCancelled ? ' [CANCELLED]' : ''}`} onClick={(e) => { e.stopPropagation(); onEventClick({ ...ev, conflicts: conflictsForEvent(ev, allEvents || events) }); }}>
                                 {flightInner}
                                 <span className="event-bar-text truncate relative z-10" style={isCancelled ? { textDecoration: 'line-through' } : {}}>{ev.title}</span>
                             </div>
@@ -976,16 +1079,35 @@
             };
 
             const renderEventRow = (ev) => {
-                const isCancelled = ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
+                const isCancelled = isCancelledEv(ev);
                 return (
-                    <div key={`${ev.date}-${ev.type}-${ev.start}-${ev.title}`} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.04)', opacity: isCancelled ? 0.5 : 1 }}>
-                        <span style={{ color: '#6b7280', fontSize: '0.65rem', minWidth: 36 }}>{ev.start || '--:--'}</span>
+                    <div key={`${ev.date}-${ev.type}-${ev.start}-${ev.title}`} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', opacity: isCancelled ? 0.5 : 1 }}>
+                        <span style={{ color: '#9ca3af', fontSize: '0.65rem', minWidth: 36 }}>{ev.start || '--:--'}</span>
                         <span style={typeBadgeStyle(ev.type)}>{ev.type === 'Flying' ? 'Fly' : ev.type === 'Ground' ? 'Gnd' : ev.type === 'Academics' ? 'Acad' : ev.type === 'Supervision' ? 'Supv' : ev.type}</span>
                         <span style={{ color: '#e5e7eb', fontSize: '0.7rem', textDecoration: isCancelled ? 'line-through' : 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.fullTitle || ev.title}</span>
-                        <span style={{ color: '#4b5563', fontSize: '0.6rem', flexShrink: 0 }}>{ev.date ? ev.date.slice(5).replace('-', '/') : ''}</span>
                     </div>
                 );
             };
+
+            // Group a week's (already date-sorted) events into "Mon, 19 Oct" day blocks
+            const groupByDay = (evs) => {
+                const days = [];
+                let cur = null;
+                evs.forEach(ev => {
+                    if (!cur || cur.date !== ev.date) { cur = { date: ev.date, evs: [] }; days.push(cur); }
+                    cur.evs.push(ev);
+                });
+                return days;
+            };
+
+            const renderWeek = (evs) => evs.length === 0
+                ? <div style={{ color: '#6b7280', fontSize: '0.7rem', fontStyle: 'italic', paddingTop: 4 }}>No events this week</div>
+                : groupByDay(evs).map(day => (
+                    <div key={day.date}>
+                        <div style={{ color: '#93c5fd', fontSize: '0.65rem', fontWeight: 700, margin: '6px 0 1px', borderBottom: '1px solid rgba(147,197,253,0.2)' }}>{dayLabel(day.date)}</div>
+                        {day.evs.map(renderEventRow)}
+                    </div>
+                ));
 
             return (
                 <div className="modal-overlay" onClick={onClose}>
@@ -1003,10 +1125,7 @@
                                     Week of {formatWeekLabel(week1.mon)}
                                 </div>
                                 <div style={{ overflowY: 'auto', flex: 1 }}>
-                                    {w1Events.length === 0
-                                        ? <div style={{ color: '#4b5563', fontSize: '0.7rem', fontStyle: 'italic', paddingTop: 4 }}>No events this week</div>
-                                        : w1Events.map(renderEventRow)
-                                    }
+                                    {renderWeek(w1Events)}
                                 </div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -1014,10 +1133,7 @@
                                     Week of {formatWeekLabel(week2.mon)}
                                 </div>
                                 <div style={{ overflowY: 'auto', flex: 1 }}>
-                                    {w2Events.length === 0
-                                        ? <div style={{ color: '#4b5563', fontSize: '0.7rem', fontStyle: 'italic', paddingTop: 4 }}>No events this week</div>
-                                        : w2Events.map(renderEventRow)
-                                    }
+                                    {renderWeek(w2Events)}
                                 </div>
                             </div>
                         </div>
@@ -1035,8 +1151,33 @@
             const [loading, setLoading] = useState(true);
             const [progress, setProgress] = useState('');
             const [error, setError] = useState(null);
-            const [selectedCategory, setSelectedCategory] = useState('All');
+            // Multi-group filter: empty set = All Personnel; customSel = Filter-modal override
+            const [selectedCats, setSelectedCats] = useState(new Set());
+            const [customSel, setCustomSel] = useState(false);
+            const [catMenuOpen, setCatMenuOpen] = useState(false);
             const [visiblePersonnel, setVisiblePersonnel] = useState(new Set());
+            // Zoom: day-column width scale (persisted)
+            const [zoomPct, setZoomPct] = useState(() => {
+                try {
+                    const v = parseInt(localStorage.getItem('gantt-zoom'), 10);
+                    return ZOOM_LEVELS.includes(v) ? v : 100;
+                } catch (e) { return 100; }
+            });
+            const dayWidth = Math.round(BASE_DAY_WIDTH * zoomPct / 100);
+            const setZoom = (pct) => {
+                setZoomPct(pct);
+                try { localStorage.setItem('gantt-zoom', String(pct)); } catch (e) {}
+            };
+            // Conflict strips toggle (default on, persisted)
+            const [showConflicts, setShowConflicts] = useState(() => {
+                try { return localStorage.getItem('gantt-conflicts') !== '0'; } catch (e) { return true; }
+            });
+            const toggleConflicts = () => setShowConflicts(prev => {
+                try { localStorage.setItem('gantt-conflicts', prev ? '0' : '1'); } catch (e) {}
+                return !prev;
+            });
+            // Conflict hover tooltip {x, y, range, lines}
+            const [conflictTip, setConflictTip] = useState(null);
             const [isFilterOpen, setIsFilterOpen] = useState(false);
             const [selectedEvent, setSelectedEvent] = useState(null);
             const [timelineSelection, setTimelineSelection] = useState(null);
@@ -1167,18 +1308,58 @@
 
             useEffect(() => { loadData(); }, []);
 
-            const handleCategoryChange = (e) => {
-                const cat = e.target.value;
-                setSelectedCategory(cat);
-                if (cat === 'All') setVisiblePersonnel(new Set(Object.values(roster).flat()));
-                else if (cat !== 'Custom' && roster[cat]) setVisiblePersonnel(new Set(roster[cat]));
+            // Multi-group select: toggle a category checkbox; union of checked groups
+            // becomes the visible set. Empty = everyone.
+            const toggleCat = (cat) => {
+                const next = new Set(customSel ? [] : selectedCats);
+                if (next.has(cat)) next.delete(cat); else next.add(cat);
+                setSelectedCats(next);
+                setCustomSel(false);
+                if (next.size === 0) setVisiblePersonnel(new Set(Object.values(roster).flat()));
+                else setVisiblePersonnel(new Set([...next].flatMap(c => roster[c] || [])));
             };
+            const selectAllCats = () => {
+                setSelectedCats(new Set());
+                setCustomSel(false);
+                setVisiblePersonnel(new Set(Object.values(roster).flat()));
+            };
+            const catLabel = customSel ? 'Custom Selection'
+                : selectedCats.size === 0 ? 'All Personnel'
+                : selectedCats.size === 1 ? [...selectedCats][0]
+                : `${selectedCats.size} groups`;
+
+            // Close category menu when clicking outside
+            useEffect(() => {
+                if (!catMenuOpen) return;
+                const close = () => setCatMenuOpen(false);
+                window.addEventListener('pointerdown', close);
+                return () => window.removeEventListener('pointerdown', close);
+            }, [catMenuOpen]);
 
             const handleFilterApply = (newSelection) => {
                 setVisiblePersonnel(newSelection);
-                setSelectedCategory('Custom');
+                setCustomSel(true);
                 setIsFilterOpen(false);
             };
+
+            // Conflict strip hover → fixed tooltip (clamped to viewport)
+            const handleConflictHover = (e, seg) => {
+                if (!e || !seg) { setConflictTip(null); return; }
+                const fmt = (ev) => `${ev.start}–${ev.end || '?'}  ${ev.fullTitle || ev.title}`;
+                setConflictTip({
+                    x: Math.min(e.clientX + 12, window.innerWidth - 310),
+                    y: Math.min(e.clientY + 12, window.innerHeight - 90),
+                    range: `${minutesToTime(seg.s)}–${minutesToTime(seg.e)}`,
+                    lines: seg.pair.map(fmt),
+                });
+            };
+
+            // Escape clears the timeline marker/range (parity with Interactive Scheduler)
+            useEffect(() => {
+                const onKey = (e) => { if (e.key === 'Escape') setTimelineSelection(null); };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, []);
 
             const toggleEventType = (key) => {
                 setVisibleTypes(prev => {
@@ -1241,13 +1422,13 @@
                     return;
                 }
                 const { mode, dayIndex, initialSelection, originTime } = dragRef.current;
-                const dayLeft = dayIndex * 300;
+                const dayLeft = dayIndex * dayWidth;
                 const container = ganttContainerRef.current || document.querySelector('.gantt-container');
                 const scrollLeft = container ? container.scrollLeft : 0;
                 const containerRect = container.getBoundingClientRect();
                 const columnVisualLeft = containerRect.left + dayLeft - scrollLeft;
                 const xInColumn = e.clientX - columnVisualLeft;
-                const percent = Math.max(0, Math.min(1, xInColumn / 300));
+                const percent = Math.max(0, Math.min(1, xInColumn / dayWidth));
                 const rangeStart = 6 * 60; const rangeEnd = 18 * 60; const totalMin = rangeEnd - rangeStart;
                 const currentTime = Math.round(rangeStart + (percent * totalMin));
 
@@ -1335,7 +1516,7 @@
                     <div className="flex flex-col h-full justify-between w-full pointer-events-none">
                         <div className="flex flex-col items-center">
                             <span className={`font-bold uppercase text-xs ${isToday ? 'text-blue-400' : 'text-white'}`}>{weekday}</span>
-                            <span className={isToday ? 'text-blue-300' : 'text-gray-400'}>{dayNum} {month}</span>
+                            <span className={isToday ? 'text-blue-300' : 'text-gray-300'}>{dayNum} {month}</span>
                         </div>
                         <div className="header-time-scale">
                             <span style={{ position: 'absolute', left: '0%' }}>6</span>
@@ -1355,6 +1536,14 @@
                     <Modal event={selectedEvent} onClose={() => setSelectedEvent(null)} />
                     <FilterModal isOpen={isFilterOpen} onClose={() => setIsFilterOpen(false)} roster={roster} currentSelection={visiblePersonnel} onApply={handleFilterApply} />
                     <PersonModal person={selectedPerson} scheduleData={scheduleData} onClose={() => setSelectedPerson(null)} />
+                    {conflictTip && (
+                        <div className="conflict-tip" style={{ left: conflictTip.x, top: conflictTip.y }}>
+                            <div style={{ color: '#f87171', fontWeight: 700, fontSize: '0.6rem', textTransform: 'uppercase', marginBottom: 2 }}>Conflict {conflictTip.range}</div>
+                            {conflictTip.lines.map((l, i) => (
+                                <div key={i} style={{ color: '#fca5a5', fontSize: '0.68rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l}</div>
+                            ))}
+                        </div>
+                    )}
                     <div className="glass-header flex justify-between items-center">
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">TPS CREW RAINBOW</h1>
@@ -1376,18 +1565,62 @@
                                         {f.label}
                                     </button>
                                 ))}
+                                <button
+                                    onClick={toggleConflicts}
+                                    title="Highlight the overlapping portion of a person's events with a red strip"
+                                    className="px-2 py-0.5 rounded text-xs font-bold transition-all"
+                                    style={showConflicts
+                                        ? { backgroundColor: '#ef444433', color: '#ef4444', border: '1px solid #ef4444' }
+                                        : { backgroundColor: 'transparent', color: '#9ca3af', border: '1px solid #4b5563' }
+                                    }
+                                >
+                                    Conflicts
+                                </button>
                             </div>
                         </div>
                         <div className="flex gap-3 items-center">
+                            {/* Zoom: 1 out + default + 4 in (percent ≈ column-width scale) */}
+                            <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1">
+                                <button
+                                    onClick={() => { const i = ZOOM_LEVELS.indexOf(zoomPct); if (i > 0) setZoom(ZOOM_LEVELS[i - 1]); }}
+                                    disabled={ZOOM_LEVELS.indexOf(zoomPct) <= 0}
+                                    className="text-white text-sm font-bold px-1 disabled:opacity-30" title="Zoom out">−</button>
+                                <span className="text-xs text-gray-200 font-bold" style={{ minWidth: 34, textAlign: 'center' }}>{zoomPct}%</span>
+                                <button
+                                    onClick={() => { const i = ZOOM_LEVELS.indexOf(zoomPct); if (i < ZOOM_LEVELS.length - 1) setZoom(ZOOM_LEVELS[i + 1]); }}
+                                    disabled={ZOOM_LEVELS.indexOf(zoomPct) >= ZOOM_LEVELS.length - 1}
+                                    className="text-white text-sm font-bold px-1 disabled:opacity-30" title="Zoom in">+</button>
+                            </div>
+                            {timelineSelection && (
+                                <button onClick={() => setTimelineSelection(null)} className="px-2 py-1 rounded-lg text-xs font-bold" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+                                    Clear Marker
+                                </button>
+                            )}
                             <button onClick={() => setIsFilterOpen(true)} className="bg-gray-700 border border-gray-600 hover:bg-gray-600 text-white px-3 py-1 rounded-lg text-sm flex items-center gap-2">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
                                 Filter
                             </button>
-                            <select value={selectedCategory} onChange={handleCategoryChange} className="bg-gray-800 border border-gray-700 text-gray-300 rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="All">All Personnel</option>
-                                {Object.keys(roster).map(cat => (<option key={cat} value={cat}>{cat}</option>))}
-                                <option value="Custom" disabled>Custom Selection</option>
-                            </select>
+                            {/* Multi-group select: check several groups to see their union
+                                (e.g. IPs + IFTEs available at the same time) */}
+                            <div style={{ position: 'relative' }} onPointerDown={e => e.stopPropagation()}>
+                                <button onClick={() => setCatMenuOpen(v => !v)} className="bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-1 text-sm flex items-center gap-2">
+                                    {catLabel} <span style={{ fontSize: '0.6rem' }}>▾</span>
+                                </button>
+                                {catMenuOpen && (
+                                    <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: '#1e1e3a', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, overflow: 'hidden', zIndex: 70, minWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                                        <div className="filter-item" style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }} onClick={selectAllCats}>
+                                            <div className="filter-checkbox" style={!customSel && selectedCats.size === 0 ? { background: '#3b82f6', borderColor: '#3b82f6' } : {}}></div>
+                                            <span className="text-sm text-gray-200 font-bold">All Personnel</span>
+                                        </div>
+                                        {Object.keys(roster).map(cat => (
+                                            <div key={cat} className="filter-item" onClick={() => toggleCat(cat)}>
+                                                <div className="filter-checkbox" style={!customSel && selectedCats.has(cat) ? { background: '#3b82f6', borderColor: '#3b82f6' } : {}}></div>
+                                                <span className="text-sm text-gray-200">{cat}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                             <div style={{ position: 'relative' }} onPointerDown={e => e.stopPropagation()}>
                                 <button onClick={() => setShowRefreshMenu(!showRefreshMenu)} className="bg-blue-600 px-4 py-1 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors">Refresh</button>
                                 {showRefreshMenu && (
@@ -1413,11 +1646,11 @@
                                 <div className="gantt-name-header" style={{ flexDirection: 'column', height: 54, padding: '4px 8px', gap: 0 }} onPointerDown={(e) => e.stopPropagation()}>
                                     <span style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>PERSONNEL</span>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 2 }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#9ca3af', cursor: 'pointer' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#cbd5e1', cursor: 'pointer' }}>
                                             <input type="checkbox" checked={showW1} onChange={() => setShowW1(v => !v)} style={{ width: 10, height: 10, accentColor: '#3b82f6' }} />
                                             This Wk
                                         </label>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#9ca3af', cursor: 'pointer' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.55rem', color: '#cbd5e1', cursor: 'pointer' }}>
                                             <input type="checkbox" checked={showW2} onChange={() => setShowW2(v => !v)} style={{ width: 10, height: 10, accentColor: '#3b82f6' }} />
                                             Next Wk
                                         </label>
@@ -1433,13 +1666,13 @@
                                             <div key={`name-${person.name}-${idx}`} className="gantt-row-name" style={{ justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setSelectedPerson(person)}>
                                                 <div>
                                                     <div className="font-bold text-white leading-tight">{person.name}</div>
-                                                    <div className="text-[10px] text-gray-500 uppercase tracking-tighter">{person.category}</div>
+                                                    <div className="text-[10px] uppercase tracking-tighter" style={{ color: '#aab4c2' }}>{person.category}</div>
                                                 </div>
                                                 {(showW1 || showW2) && (
                                                     <div style={{ fontSize: '0.6rem', textAlign: 'right', lineHeight: '1.3', flexShrink: 0, marginLeft: 4 }}>
                                                         {showW1 && wl.w1.label && (
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
-                                                                <span style={{ color: '#9ca3af' }}>{wl.w1.label}</span>
+                                                                <span style={{ color: '#cbd5e1' }}>{wl.w1.label}</span>
                                                                 <span style={{ color: '#10b981' }}>{wl.w1.fly}</span>
                                                                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
                                                                 <span style={{ color: '#f59e0b' }}>{wl.w1.gnd}</span>
@@ -1447,7 +1680,7 @@
                                                         )}
                                                         {showW2 && wl.w2.label && (
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 2, justifyContent: 'flex-end' }}>
-                                                                <span style={{ color: '#9ca3af' }}>{wl.w2.label}</span>
+                                                                <span style={{ color: '#cbd5e1' }}>{wl.w2.label}</span>
                                                                 <span style={{ color: '#10b981' }}>{wl.w2.fly}</span>
                                                                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }}></span>
                                                                 <span style={{ color: '#f59e0b' }}>{wl.w2.gnd}</span>
@@ -1462,7 +1695,7 @@
                             </div>
                             {/* Right panel: scrollable schedule grid */}
                             <div className="gantt-container" ref={ganttContainerRef} onPointerDown={handleContainerPointerDown}>
-                                <div className="gantt-grid" style={{ gridTemplateColumns: `repeat(${dates.length}, 300px)` }}>
+                                <div className="gantt-grid" style={{ gridTemplateColumns: `repeat(${dates.length}, ${dayWidth}px)` }}>
                                     {(() => {
                                         const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
                                         return dates.map((date, idx) => {
@@ -1481,15 +1714,16 @@
                                     {personnelList.map((person, idx) => (
                                         <React.Fragment key={`${person.name}-${idx}`}>
                                             {dates.map(date => {
-                                                const cellEvents = scheduleData.filter(e => e.person === person.name && e.date === date && visibleTypes.has(e.type));
+                                                const personDayEvents = scheduleData.filter(e => e.person === person.name && e.date === date);
+                                                const cellEvents = personDayEvents.filter(e => visibleTypes.has(e.type));
                                                 const status = visibleTypes.has('Notes') ? personnelStatuses.find(s => s.person === person.name && s.date === date) : null;
-                                                return (<div key={`${person.name}-${date}`} className="gantt-cell-container"><GanttCell events={cellEvents} status={status} onEventClick={(ev) => { setSelectedEvent(ev); }} /></div>);
+                                                return (<div key={`${person.name}-${date}`} className="gantt-cell-container"><GanttCell events={cellEvents} allEvents={personDayEvents} status={status} showConflicts={showConflicts} onConflictHover={handleConflictHover} onEventClick={(ev) => { setSelectedEvent(ev); }} /></div>);
                                             })}
                                         </React.Fragment>
                                     ))}
                                     {/* Timeline marker: absolutely positioned within the grid (position:relative).
                                         Absolute grid children don't create implicit rows/columns. */}
-                                    {timelineSelection && (<TimelineMarkerLine selection={timelineSelection} dayIndex={timelineSelection.dayIndex} />)}
+                                    {timelineSelection && (<TimelineMarkerLine selection={timelineSelection} dayIndex={timelineSelection.dayIndex} dayWidth={dayWidth} />)}
                                     {/* Now line: dashed vertical at current time on today's column */}
                                     {(() => {
                                         const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -1498,7 +1732,7 @@
                                         const nowPacific = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
                                         const nowMinutes = nowPacific.getHours() * 60 + nowPacific.getMinutes();
                                         if (nowMinutes < 6 * 60 || nowMinutes > 18 * 60) return null;
-                                        const leftPx = todayIdx * 300 + getLeftPercent(nowMinutes) * 3;
+                                        const leftPx = todayIdx * dayWidth + (getLeftPercent(nowMinutes) / 100) * dayWidth;
                                         return <div className="now-line" style={{ left: `${leftPx}px` }} />;
                                     })()}
                                 </div>
