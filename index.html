@@ -1,4 +1,4 @@
-<!-- Version 6.5 - UI zoom (scales everything) + TL timeline-width zoom, filter modal pinned Selected chips -->
+<!-- Version 6.5.1 - Supervision duties overlapping each other never flag as conflicts; supervision vs anything else still flags -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -570,7 +570,9 @@
         const isCancelledEv = (ev) => ev.cancelled && String(ev.cancelled).toUpperCase() === 'TRUE';
 
         // Overlap segments among one person's events this day, with the pair of
-        // events behind each segment (for the hover tooltip)
+        // events behind each segment (for the hover tooltip). Supervision duties
+        // routinely overlap EACH OTHER by design — never flagged against each
+        // other, still flagged against everything else.
         const computeConflictSegs = (evs) => {
             const timed = evs
                 .filter(e => !isCancelledEv(e))
@@ -579,6 +581,7 @@
             const segs = [];
             for (let a = 0; a < timed.length; a++) {
                 for (let b = a + 1; b < timed.length; b++) {
+                    if (timed[a].ev.type === 'Supervision' && timed[b].ev.type === 'Supervision') continue;
                     const os = Math.max(timed[a].s, timed[b].s);
                     const oe = Math.min(timed[a].e2, timed[b].e2);
                     if (oe > os) segs.push({ s: os, e: oe, pair: [timed[a].ev, timed[b].ev] });
@@ -594,6 +597,7 @@
             if (s == null || e == null || e <= s || isCancelledEv(ev)) return [];
             return evs.filter(o => {
                 if (o === ev || isCancelledEv(o)) return false;
+                if (o.type === 'Supervision' && ev.type === 'Supervision') return false;
                 const os = timeToMinutes(o.start);
                 const oe = timeToMinutes(o.end);
                 return os != null && oe != null && oe > os && Math.min(e, oe) > Math.max(s, os);
